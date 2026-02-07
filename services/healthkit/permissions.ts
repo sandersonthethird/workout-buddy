@@ -1,14 +1,5 @@
-import AppleHealthKit from 'react-native-health';
 import { Platform } from 'react-native';
-import { HK_PERMISSIONS } from '@/types/healthkit';
-
-// Type definitions for react-native-health
-type HealthKitPermissions = {
-  permissions: {
-    read: string[];
-    write: string[];
-  };
-};
+import AppleHealthKit, { type HealthKitPermissions } from 'react-native-health';
 
 /**
  * HealthKit Permissions Manager
@@ -21,7 +12,7 @@ const REQUIRED_PERMISSIONS: HealthKitPermissions = {
     read: [
       AppleHealthKit.Constants.Permissions.Workout,
       AppleHealthKit.Constants.Permissions.DistanceSwimming,
-      AppleHealthKit.Constants.Permissions.SwimmingStrokeCount,
+      'SwimmingStrokeCount' as any, // Not in enum but supported by HealthKit
       AppleHealthKit.Constants.Permissions.HeartRate,
       AppleHealthKit.Constants.Permissions.ActiveEnergyBurned,
     ],

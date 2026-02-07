@@ -1,5 +1,5 @@
-import OpenAI from 'openai';
 import Constants from 'expo-constants';
+import OpenAI from 'openai';
 
 /**
  * OpenAI Client Configuration
@@ -25,11 +25,15 @@ if (!openaiApiKey) {
   );
 }
 
+// Define the wrapper to force usage of the global (native) fetch
+const customFetch: typeof fetch = async (url, init) => {
+  return globalThis.fetch(url, init);
+};
+
 export const openai = new OpenAI({
   apiKey: openaiApiKey,
   dangerouslyAllowBrowser: true,
-  // Use React Native's global fetch
-  fetch: fetch,
+  fetch: customFetch, // <--- This line saves you from the crash
 });
 
 /**
