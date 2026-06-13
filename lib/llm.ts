@@ -1,14 +1,17 @@
 import Constants from 'expo-constants';
 import OpenAI from 'openai';
-import Anthropic from '@anthropic-ai/sdk';
 import type { ProviderId } from './models';
 
 /**
  * LLM Client Configuration
  *
- * Initializes provider clients (OpenAI and Anthropic) for natural language
- * query processing. The model the user selects in Settings determines which
- * provider is used at request time — see services/chat/query-parser.ts.
+ * Holds API keys and a configured OpenAI client for natural language query
+ * processing. The model the user selects in Settings determines which provider
+ * is used at request time — see services/chat/query-parser.ts.
+ *
+ * Note: Anthropic is called via raw fetch (not @anthropic-ai/sdk) because that
+ * SDK statically imports Node built-ins (node:fs) that Metro cannot bundle for
+ * React Native. This mirrors how the OpenAI request is already made.
  *
  * Setup Instructions:
  * 1. Get an API key:
@@ -47,12 +50,6 @@ const customFetch: typeof fetch = async (url, init) => {
 
 export const openai = new OpenAI({
   apiKey: openaiApiKey,
-  dangerouslyAllowBrowser: true,
-  fetch: customFetch,
-});
-
-export const anthropic = new Anthropic({
-  apiKey: anthropicApiKey,
   dangerouslyAllowBrowser: true,
   fetch: customFetch,
 });
