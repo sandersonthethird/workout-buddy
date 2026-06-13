@@ -127,6 +127,9 @@ export function useHealthKitSync(): UseHealthKitSyncResult {
       let workoutsSynced = 0;
       let workoutsSkipped = 0;
       let workoutsFailed = 0;
+      // Capture the first failure's message so it's visible in-app (console
+      // logs aren't accessible in a standalone build).
+      let firstErrorMessage: string | null = null;
 
       for (let i = 0; i < workouts.length; i++) {
         const hkWorkout = workouts[i];
@@ -201,6 +204,7 @@ export function useHealthKitSync(): UseHealthKitSyncResult {
         } catch (error) {
           workoutsFailed++;
           const errorMsg = error instanceof Error ? error.message : String(error);
+          if (!firstErrorMessage) firstErrorMessage = errorMsg;
           console.error(`[Sync] ❌ FAILED workout ${i + 1}:`, errorMsg);
           console.error('[Sync] Workout details:', {
             uuid: hkWorkout.uuid,
@@ -221,7 +225,7 @@ export function useHealthKitSync(): UseHealthKitSyncResult {
         workoutsSynced,
         workoutsSkipped,
         status: 'complete',
-        message: `Sync complete! ${workoutsSynced} workouts imported, ${workoutsSkipped} skipped${workoutsFailed > 0 ? `, ${workoutsFailed} failed` : ''}`,
+        message: `Sync complete! ${workoutsSynced} workouts imported, ${workoutsSkipped} skipped${workoutsFailed > 0 ? `, ${workoutsFailed} failed` : ''}${firstErrorMessage ? `\nFirst error: ${firstErrorMessage}` : ''}`,
       });
 
       // Refresh count
@@ -233,7 +237,10 @@ export function useHealthKitSync(): UseHealthKitSyncResult {
         alertMessage += `\n${workoutsSkipped} duplicate${workoutsSkipped !== 1 ? 's' : ''} skipped.`;
       }
       if (workoutsFailed > 0) {
-        alertMessage += `\n⚠️ ${workoutsFailed} workout${workoutsFailed !== 1 ? 's' : ''} failed to import. Check console for details.`;
+        alertMessage += `\n⚠️ ${workoutsFailed} workout${workoutsFailed !== 1 ? 's' : ''} failed to import.`;
+        if (firstErrorMessage) {
+          alertMessage += `\n\nFirst error:\n${firstErrorMessage}`;
+        }
       }
 
       Alert.alert(
