@@ -4,9 +4,13 @@ import { useEffect } from 'react';
 import { Text, View } from '@/components/Themed';
 import { useHealthKitSync } from '@/hooks/useHealthKitSync';
 import { useDatabase } from '@/contexts/DatabaseContext';
+import { useSettings } from '@/contexts/SettingsContext';
+import { AVAILABLE_MODELS, PROVIDER_LABELS, getModel, type ProviderId } from '@/lib/models';
+import { isProviderConfigured } from '@/lib/llm';
 
 export default function TabTwoScreen() {
   const { isInitialized } = useDatabase();
+  const { selectedModelId, setSelectedModel } = useSettings();
   const {
     syncProgress,
     isSyncing,
@@ -14,6 +18,11 @@ export default function TabTwoScreen() {
     startSync,
     refreshWorkoutCount,
   } = useHealthKitSync();
+
+  const selectedModel = getModel(selectedModelId);
+  const providers = Array.from(
+    new Set(AVAILABLE_MODELS.map((m) => m.provider))
+  ) as ProviderId[];
 
   // Load workout count on mount
   useEffect(() => {
@@ -28,6 +37,58 @@ export default function TabTwoScreen() {
       </RNView>
 
       <ScrollView contentContainerStyle={styles.content}>
+        {/* Chat Model */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Chat Model</Text>
+          <Text style={styles.sectionDescription}>
+            Choose which AI model generates database queries from your questions.
+          </Text>
+
+          {providers.map((provider) => {
+            const configured = isProviderConfigured(provider);
+            const models = AVAILABLE_MODELS.filter((m) => m.provider === provider);
+
+            return (
+              <RNView key={provider} style={styles.providerGroup}>
+                <RNView style={styles.providerHeaderRow}>
+                  <Text style={styles.providerLabel}>{PROVIDER_LABELS[provider]}</Text>
+                  {!configured && <Text style={styles.providerBadge}>API key needed</Text>}
+                </RNView>
+
+                {models.map((model) => {
+                  const isSelected = model.id === selectedModelId;
+                  return (
+                    <TouchableOpacity
+                      key={model.id}
+                      style={[styles.modelRow, isSelected && styles.modelRowSelected]}
+                      onPress={() => setSelectedModel(model.id)}
+                      activeOpacity={0.7}
+                    >
+                      <RNView style={styles.modelInfo}>
+                        <Text style={styles.modelLabel}>{model.label}</Text>
+                        <Text style={styles.modelDescription}>{model.description}</Text>
+                      </RNView>
+                      {isSelected && <Text style={styles.modelCheck}>✓</Text>}
+                    </TouchableOpacity>
+                  );
+                })}
+              </RNView>
+            );
+          })}
+
+          {!isProviderConfigured(selectedModel.provider) && (
+            <RNView style={styles.warningBox}>
+              <Text style={styles.warningText}>
+                {selectedModel.label} needs a {PROVIDER_LABELS[selectedModel.provider]} API key.
+                Add {selectedModel.provider === 'anthropic'
+                  ? 'EXPO_PUBLIC_ANTHROPIC_API_KEY'
+                  : 'EXPO_PUBLIC_OPENAI_API_KEY'}{' '}
+                to your environment, then rebuild.
+              </Text>
+            </RNView>
+          )}
+        </View>
+
         {/* Database Stats */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Database</Text>
@@ -119,14 +180,15 @@ export default function TabTwoScreen() {
           <Text style={styles.sectionTitle}>About</Text>
           <Text style={styles.infoText}>
             This app stores all your workout data locally on your device. Your raw health data never
-            leaves your phone - only metadata is sent to OpenAI to generate database queries.
+            leaves your phone - only your question and the database schema are sent to your selected
+            AI provider to generate database queries.
           </Text>
 
           <RNView style={styles.infoBox}>
             <Text style={styles.infoBoxTitle}>Privacy First</Text>
             <Text style={styles.infoBoxText}>
               • All data stored locally in SQLite{'\n'}
-              • Only query metadata sent to OpenAI{'\n'}
+              • Only your question + schema sent to the AI provider{'\n'}
               • Raw health data stays on device{'\n'}
               • Optional cloud backup via Supabase
             </Text>
@@ -178,6 +240,81 @@ const styles = StyleSheet.create({
     color: '#666',
     marginBottom: 16,
     lineHeight: 20,
+  },
+  providerGroup: {
+    marginBottom: 12,
+  },
+  providerHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  providerLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#888',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  providerBadge: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#B26A00',
+    backgroundColor: '#FFF3E0',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+  modelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FFF',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#E8E8E8',
+    marginBottom: 8,
+  },
+  modelRowSelected: {
+    borderColor: '#007AFF',
+    backgroundColor: '#F0F7FF',
+  },
+  modelInfo: {
+    flex: 1,
+    backgroundColor: 'transparent',
+  },
+  modelLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#000',
+  },
+  modelDescription: {
+    fontSize: 13,
+    color: '#666',
+    marginTop: 2,
+  },
+  modelCheck: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#007AFF',
+    marginLeft: 12,
+  },
+  warningBox: {
+    backgroundColor: '#FFF3E0',
+    padding: 12,
+    borderRadius: 8,
+    borderLeftWidth: 3,
+    borderLeftColor: '#FB8C00',
+    marginTop: 4,
+  },
+  warningText: {
+    fontSize: 13,
+    color: '#B26A00',
+    lineHeight: 18,
   },
   statsRow: {
     flexDirection: 'row',

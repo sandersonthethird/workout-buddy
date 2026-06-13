@@ -1,31 +1,46 @@
 import Constants from 'expo-constants';
 import OpenAI from 'openai';
+import Anthropic from '@anthropic-ai/sdk';
+import type { ProviderId } from './models';
 
 /**
- * OpenAI Client Configuration
+ * LLM Client Configuration
  *
- * Initializes the OpenAI client for natural language query processing.
+ * Initializes provider clients (OpenAI and Anthropic) for natural language
+ * query processing. The model the user selects in Settings determines which
+ * provider is used at request time — see services/chat/query-parser.ts.
  *
  * Setup Instructions:
- * 1. Get your API key from https://platform.openai.com/api-keys
- * 2. Add it to your app config:
- *    - For development: create a .env file with:
- *      EXPO_PUBLIC_OPENAI_API_KEY=your-api-key
- *    - For production: add to app.json extra config
+ * 1. Get an API key:
+ *    - OpenAI: https://platform.openai.com/api-keys
+ *    - Anthropic: https://console.anthropic.com/settings/keys
+ * 2. Add it to your environment:
+ *    - For development: create a .env file with
+ *      EXPO_PUBLIC_OPENAI_API_KEY=your-key
+ *      EXPO_PUBLIC_ANTHROPIC_API_KEY=your-key
+ *    - For EAS builds: set the same variables on the build profile's
+ *      environment (eas env:create) so they're embedded at build time.
  */
 
-const openaiApiKey = Constants.expoConfig?.extra?.openaiApiKey ||
-                     process.env.EXPO_PUBLIC_OPENAI_API_KEY ||
-                     '';
+const openaiApiKey =
+  Constants.expoConfig?.extra?.openaiApiKey ||
+  process.env.EXPO_PUBLIC_OPENAI_API_KEY ||
+  '';
 
-if (!openaiApiKey) {
+const anthropicApiKey =
+  Constants.expoConfig?.extra?.anthropicApiKey ||
+  process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY ||
+  '';
+
+if (!openaiApiKey && !anthropicApiKey) {
   console.warn(
-    'OpenAI API key not configured. Chat functionality will be disabled.\n' +
-    'To enable chat, add EXPO_PUBLIC_OPENAI_API_KEY to your environment.'
+    'No LLM API key configured. Chat functionality will be disabled.\n' +
+      'Add EXPO_PUBLIC_OPENAI_API_KEY or EXPO_PUBLIC_ANTHROPIC_API_KEY to your environment.'
   );
 }
 
-// Define the wrapper to force usage of the global (native) fetch
+// Force usage of the global (native) fetch — without this, the SDKs reach for
+// a fetch implementation that crashes in React Native.
 const customFetch: typeof fetch = async (url, init) => {
   return globalThis.fetch(url, init);
 };
@@ -33,20 +48,41 @@ const customFetch: typeof fetch = async (url, init) => {
 export const openai = new OpenAI({
   apiKey: openaiApiKey,
   dangerouslyAllowBrowser: true,
-  fetch: customFetch, // <--- This line saves you from the crash
+  fetch: customFetch,
+});
+
+export const anthropic = new Anthropic({
+  apiKey: anthropicApiKey,
+  dangerouslyAllowBrowser: true,
+  fetch: customFetch,
 });
 
 /**
- * Check if OpenAI is configured
+ * Return the API key for a provider (read directly from env at call time).
+ */
+export function getApiKey(provider: ProviderId): string {
+  return provider === 'anthropic' ? anthropicApiKey : openaiApiKey;
+}
+
+/**
+ * Check if a given provider has an API key configured.
+ */
+export function isProviderConfigured(provider: ProviderId): boolean {
+  return Boolean(getApiKey(provider));
+}
+
+/**
+ * @deprecated Kept for backwards compatibility. Prefer isProviderConfigured().
  */
 export function isOpenAIConfigured(): boolean {
   return Boolean(openaiApiKey);
 }
 
 /**
- * Models to use for different purposes
+ * Legacy model constants (OpenAI). New code should use the model registry in
+ * lib/models.ts and the user-selected model instead.
  */
 export const MODELS = {
-  QUERY_GENERATION: 'gpt-4o-mini', // Fast and cheap for SQL generation
-  ANALYSIS: 'gpt-4o', // More capable for complex analysis
+  QUERY_GENERATION: 'gpt-4o-mini',
+  ANALYSIS: 'gpt-4o',
 } as const;

@@ -3,16 +3,21 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Text, View } from '@/components/Themed';
 import { useDatabase } from '@/contexts/DatabaseContext';
+import { useSettings } from '@/contexts/SettingsContext';
 import { useChat } from '@/hooks/useChat';
 import { ChatMessage } from '@/components/chat/ChatMessage';
 import { ChatInput } from '@/components/chat/ChatInput';
-import { isOpenAIConfigured } from '@/lib/llm';
+import { isProviderConfigured } from '@/lib/llm';
+import { getModel, PROVIDER_LABELS } from '@/lib/models';
 
 export default function TabOneScreen() {
   const { isInitialized, error: dbError } = useDatabase();
+  const { selectedModelId } = useSettings();
   const { messages, isLoading, error, sendMessage } = useChat();
 
-  const isReady = isInitialized && isOpenAIConfigured();
+  const selectedModel = getModel(selectedModelId);
+  const providerConfigured = isProviderConfigured(selectedModel.provider);
+  const isReady = isInitialized && providerConfigured;
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -27,11 +32,17 @@ export default function TabOneScreen() {
             <Text style={styles.statusError}>Database Error: {dbError.message}</Text>
           ) : !isInitialized ? (
             <Text style={styles.statusLoading}>Initializing database...</Text>
-          ) : !isOpenAIConfigured() ? (
+          ) : !providerConfigured ? (
             <>
-              <Text style={styles.statusError}>OpenAI API key not configured</Text>
+              <Text style={styles.statusError}>
+                {PROVIDER_LABELS[selectedModel.provider]} API key not configured
+              </Text>
               <Text style={styles.statusHint}>
-                Add EXPO_PUBLIC_OPENAI_API_KEY to your .env file
+                Add{' '}
+                {selectedModel.provider === 'anthropic'
+                  ? 'EXPO_PUBLIC_ANTHROPIC_API_KEY'
+                  : 'EXPO_PUBLIC_OPENAI_API_KEY'}{' '}
+                to your environment, or pick a different model in Settings
               </Text>
             </>
           ) : null}
