@@ -15,14 +15,17 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.sandycass.workoutbuddy", // Changed from "com.workoutbuddy.app"
+      "bundleIdentifier": "com.sandycass.workoutbuddy",
       "entitlements": {
         "com.apple.developer.healthkit": true
       },
       "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
         "NSHealthShareUsageDescription": "Workout Buddy needs access to your workout data to display your swim statistics and analyze your performance.",
         "NSHealthUpdateUsageDescription": "Workout Buddy needs permission to update your health data.",
-        "UIBackgroundModes": ["fetch"]
+        "UIBackgroundModes": [
+          "fetch"
+        ]
       }
     },
     "android": {
@@ -44,6 +47,13 @@
     ],
     "experiments": {
       "typedRoutes": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "1ff2fe5e-f0ed-450e-99b6-8901b1bd0807"
+      }
+    },
+    "owner": "quicksand"
   }
 }
