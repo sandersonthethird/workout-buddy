@@ -245,9 +245,87 @@ const migration_v2: Migration = {
 };
 
 /**
+ * Add a column to a table only if it does not already exist.
+ * Safe across databases that arrived at the current state via different paths
+ * (fresh v1 install vs. upgraded-through-v2), where a column may or may not
+ * already be present.
+ */
+export async function addColumnIfMissing(
+  db: SQLite.SQLiteDatabase,
+  table: string,
+  column: string,
+  definition: string
+): Promise<void> {
+  const columns = await db.getAllAsync<{ name: string }>(
+    `PRAGMA table_info(${table})`
+  );
+  const exists = columns.some((c) => c.name === column);
+  if (!exists) {
+    console.log(`Adding missing column ${table}.${column}`);
+    await db.execAsync(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition};`);
+  }
+}
+
+/**
+ * Reconcile the live database against the current schema by adding any columns
+ * that are missing.
+ *
+ * initDatabase() creates tables with CREATE TABLE IF NOT EXISTS and does not
+ * run the version-gated migration runner, so databases created under an older
+ * schema keep their old column set (CREATE IF NOT EXISTS never alters an
+ * existing table). This idempotent pass closes that drift on every launch —
+ * notably restoring workouts.pool_length_unit, whose absence makes every
+ * workout insert fail and silently rolls back the HealthKit import.
+ */
+export async function reconcileSchema(db: SQLite.SQLiteDatabase): Promise<void> {
+  await addColumnIfMissing(db, 'workouts', 'pool_length_unit', 'TEXT');
+  await addColumnIfMissing(db, 'segments', 'swim_duration_seconds', 'REAL');
+  await addColumnIfMissing(db, 'segments', 'rest_duration_seconds', 'REAL');
+}
+
+/**
+ * Migration v3: Restore pool_length_unit on workouts.
+ *
+ * migration_v2 rebuilt the workouts table without pool_length_unit, but the
+ * insert path (and current schema) require it. Without this column every new
+ * workout insert fails with "table workouts has no column named
+ * pool_length_unit", rolling back the import transaction.
+ */
+const migration_v3: Migration = {
+  version: 3,
+  up: async (db: SQLite.SQLiteDatabase) => {
+    console.log('Running migration v3: Add workouts.pool_length_unit');
+    await addColumnIfMissing(db, 'workouts', 'pool_length_unit', 'TEXT');
+    console.log('Migration v3 completed successfully');
+  },
+};
+
+/**
+ * Migration v4: Ensure segments has swim/rest duration columns.
+ *
+ * Defensive: databases created via the v1 schema already have these, but any
+ * that reached the segments table through a path lacking them are reconciled
+ * here so insertSegments() does not fail.
+ */
+const migration_v4: Migration = {
+  version: 4,
+  up: async (db: SQLite.SQLiteDatabase) => {
+    console.log('Running migration v4: Ensure segments swim/rest duration columns');
+    await addColumnIfMissing(db, 'segments', 'swim_duration_seconds', 'REAL');
+    await addColumnIfMissing(db, 'segments', 'rest_duration_seconds', 'REAL');
+    console.log('Migration v4 completed successfully');
+  },
+};
+
+/**
  * All migrations in order
  */
-const MIGRATIONS: Migration[] = [migration_v1, migration_v2];
+const MIGRATIONS: Migration[] = [
+  migration_v1,
+  migration_v2,
+  migration_v3,
+  migration_v4,
+];
 
 /**
  * Run pending migrations

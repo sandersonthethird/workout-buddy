@@ -1,5 +1,6 @@
 import * as SQLite from 'expo-sqlite';
 import { ALL_TABLES, CURRENT_SCHEMA_VERSION } from '../services/database/schema';
+import { reconcileSchema } from '../services/database/migrations';
 
 /**
  * Database Manager
@@ -33,6 +34,10 @@ export async function initDatabase(): Promise<SQLite.SQLiteDatabase> {
     for (const sql of ALL_TABLES) {
       await db.execAsync(sql);
     }
+
+    // Reconcile columns that may be missing on databases created under an
+    // older schema (CREATE TABLE IF NOT EXISTS does not alter existing tables).
+    await reconcileSchema(db);
 
     // Set schema version
     await db.execAsync(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION}`);
