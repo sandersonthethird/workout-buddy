@@ -2,9 +2,11 @@ import { useState, useCallback } from 'react';
 import uuid from 'react-native-uuid';
 import { ChatMessage } from '@/types/workout';
 import { useDatabase } from '@/contexts/DatabaseContext';
+import { useSettings } from '@/contexts/SettingsContext';
 import { processUserQuery } from '@/services/chat/query-parser';
 import { formatQueryResults } from '@/services/chat/response-formatter';
-import { isOpenAIConfigured } from '@/lib/llm';
+import { isProviderConfigured } from '@/lib/llm';
+import { getModel, PROVIDER_LABELS } from '@/lib/models';
 
 /**
  * useChat Hook
@@ -14,6 +16,7 @@ import { isOpenAIConfigured } from '@/lib/llm';
 
 export function useChat() {
   const { db, isInitialized } = useDatabase();
+  const { selectedModelId } = useSettings();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -28,8 +31,15 @@ export function useChat() {
         return;
       }
 
-      if (!isOpenAIConfigured()) {
-        setError('OpenAI API key not configured. Please add EXPO_PUBLIC_OPENAI_API_KEY to your .env file.');
+      const model = getModel(selectedModelId);
+      if (!isProviderConfigured(model.provider)) {
+        const envVar =
+          model.provider === 'anthropic'
+            ? 'EXPO_PUBLIC_ANTHROPIC_API_KEY'
+            : 'EXPO_PUBLIC_OPENAI_API_KEY';
+        setError(
+          `${PROVIDER_LABELS[model.provider]} API key not configured. Add ${envVar} to your environment to use ${model.label}.`
+        );
         return;
       }
 
@@ -49,7 +59,7 @@ export function useChat() {
 
       try {
         // Process query
-        const result = await processUserQuery(db, content);
+        const result = await processUserQuery(db, content, selectedModelId);
 
         if (result.error) {
           // Error response
@@ -119,7 +129,7 @@ export function useChat() {
         setIsLoading(false);
       }
     },
-    [db, isInitialized]
+    [db, isInitialized, selectedModelId]
   );
 
   /**

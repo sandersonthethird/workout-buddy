@@ -1,4 +1,6 @@
-import { openai, MODELS, isOpenAIConfigured } from '@/lib/llm';
+import Anthropic from '@anthropic-ai/sdk';
+import { anthropic, getApiKey, isProviderConfigured } from '@/lib/llm';
+import { getModel, DEFAULT_MODEL_ID } from '@/lib/models';
 import * as SQLite from 'expo-sqlite';
 
 /**
@@ -269,73 +271,144 @@ Remember:
 - Be helpful and interpret the user's intent`;
 
 /**
- * Convert natural language query to SQL using OpenAI
- * Uses direct fetch API for better React Native compatibility
+ * Extract a JSON object from a model response.
+ *
+ * OpenAI (json_object mode) returns clean JSON, but Anthropic returns free
+ * text, which may include a leading sentence or markdown fences despite the
+ * "JSON only" instruction. Pull out the first balanced {...} object.
  */
-export async function parseNaturalLanguageQuery(
-  userQuery: string
-): Promise<{ sql: string; explanation: string }> {
-  if (!isOpenAIConfigured()) {
+function extractJsonObject(text: string): { sql: string; explanation: string } {
+  const trimmed = text.trim();
+  let candidate = trimmed;
+
+  // Try direct parse first.
+  try {
+    return validateParsed(JSON.parse(candidate));
+  } catch {
+    // Fall through to extraction.
+  }
+
+  // Strip markdown code fences if present.
+  const fenceMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenceMatch) {
+    candidate = fenceMatch[1].trim();
+    try {
+      return validateParsed(JSON.parse(candidate));
+    } catch {
+      // Fall through.
+    }
+  }
+
+  // Last resort: grab the substring from the first { to the last }.
+  const start = trimmed.indexOf('{');
+  const end = trimmed.lastIndexOf('}');
+  if (start !== -1 && end > start) {
+    return validateParsed(JSON.parse(trimmed.slice(start, end + 1)));
+  }
+
+  throw new Error('Could not parse JSON from model response');
+}
+
+function validateParsed(parsed: any): { sql: string; explanation: string } {
+  if (!parsed || !parsed.sql || !parsed.explanation) {
+    throw new Error('Invalid response format from model');
+  }
+  return {
+    sql: String(parsed.sql).trim(),
+    explanation: String(parsed.explanation).trim(),
+  };
+}
+
+/**
+ * Call OpenAI's chat completions endpoint via direct fetch (best React Native
+ * compatibility) and return the raw JSON content string.
+ */
+async function callOpenAI(modelId: string, userQuery: string): Promise<string> {
+  const apiKey = getApiKey('openai');
+  if (!apiKey) {
     throw new Error('OpenAI API key not configured');
   }
 
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: modelId,
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: userQuery },
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0.1,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.text();
+    console.error('OpenAI API error:', response.status, errorData);
+    throw new Error(`OpenAI API error: ${response.status} - ${errorData}`);
+  }
+
+  const data = await response.json();
+  const content = data.choices[0]?.message?.content;
+  if (!content) {
+    throw new Error('No response from OpenAI');
+  }
+  return content;
+}
+
+/**
+ * Call Anthropic's Messages API via the official SDK and return the response
+ * text. Uses the user-selected Claude model. Thinking is left off (the prompt
+ * demands JSON only) and no sampling params are sent — temperature is removed
+ * on Opus 4.8 / 4.7 and unnecessary here.
+ */
+async function callAnthropic(modelId: string, userQuery: string): Promise<string> {
+  if (!isProviderConfigured('anthropic')) {
+    throw new Error('Anthropic API key not configured');
+  }
+
+  const message = await anthropic.messages.create({
+    model: modelId,
+    max_tokens: 2048,
+    system: SYSTEM_PROMPT,
+    messages: [{ role: 'user', content: userQuery }],
+  });
+
+  const text = message.content
+    .filter((block): block is Anthropic.TextBlock => block.type === 'text')
+    .map((block) => block.text)
+    .join('')
+    .trim();
+
+  if (!text) {
+    throw new Error('No response from Anthropic');
+  }
+  return text;
+}
+
+/**
+ * Convert a natural language query to SQL using the selected model, routing to
+ * the correct provider.
+ */
+export async function parseNaturalLanguageQuery(
+  userQuery: string,
+  modelId: string = DEFAULT_MODEL_ID
+): Promise<{ sql: string; explanation: string }> {
+  const model = getModel(modelId);
+
   try {
-    // Get API key directly from environment
-    const apiKey = process.env.EXPO_PUBLIC_OPENAI_API_KEY;
+    const content =
+      model.provider === 'anthropic'
+        ? await callAnthropic(model.id, userQuery)
+        : await callOpenAI(model.id, userQuery);
 
-    if (!apiKey) {
-      throw new Error('OpenAI API key not found in environment');
-    }
-
-    console.log('Making OpenAI API request...');
-    console.log('API Key present:', apiKey ? 'Yes' : 'No');
-    console.log('API Key length:', apiKey?.length);
-
-    // Make direct fetch call instead of using OpenAI SDK
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: MODELS.QUERY_GENERATION,
-        messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content: userQuery },
-        ],
-        response_format: { type: 'json_object' },
-        temperature: 0.1,
-      }),
-    });
-
-    console.log('OpenAI API response status:', response.status);
-
-    if (!response.ok) {
-      const errorData = await response.text();
-      console.error('OpenAI API error:', response.status, errorData);
-      throw new Error(`OpenAI API error: ${response.status} - ${errorData}`);
-    }
-
-    const data = await response.json();
-    const content = data.choices[0]?.message?.content;
-
-    if (!content) {
-      throw new Error('No response from OpenAI');
-    }
-
-    const parsed = JSON.parse(content);
-
-    if (!parsed.sql || !parsed.explanation) {
-      throw new Error('Invalid response format from OpenAI');
-    }
-
-    return {
-      sql: parsed.sql.trim(),
-      explanation: parsed.explanation.trim(),
-    };
+    return extractJsonObject(content);
   } catch (error) {
-    console.error('Error parsing query with OpenAI:', error);
+    console.error(`Error parsing query with ${model.provider}:`, error);
     throw new Error(
       error instanceof Error ? error.message : 'Failed to parse query'
     );
@@ -410,11 +483,12 @@ export async function executeQuery(
  */
 export async function processUserQuery(
   db: SQLite.SQLiteDatabase,
-  userQuery: string
+  userQuery: string,
+  modelId: string = DEFAULT_MODEL_ID
 ): Promise<QueryResult> {
   try {
     // Step 1: Convert to SQL
-    const { sql, explanation } = await parseNaturalLanguageQuery(userQuery);
+    const { sql, explanation } = await parseNaturalLanguageQuery(userQuery, modelId);
 
     // Step 2: Execute query
     const results = await executeQuery(db, sql);
