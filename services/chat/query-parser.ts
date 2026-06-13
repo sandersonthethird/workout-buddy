@@ -1,5 +1,4 @@
-import Anthropic from '@anthropic-ai/sdk';
-import { anthropic, getApiKey, isProviderConfigured } from '@/lib/llm';
+import { getApiKey } from '@/lib/llm';
 import { getModel, DEFAULT_MODEL_ID } from '@/lib/models';
 import * as SQLite from 'expo-sqlite';
 
@@ -361,28 +360,51 @@ async function callOpenAI(modelId: string, userQuery: string): Promise<string> {
 }
 
 /**
- * Call Anthropic's Messages API via the official SDK and return the response
- * text. Uses the user-selected Claude model. Thinking is left off (the prompt
- * demands JSON only) and no sampling params are sent — temperature is removed
- * on Opus 4.8 / 4.7 and unnecessary here.
+ * Call Anthropic's Messages API via direct fetch and return the response text.
+ *
+ * Uses raw fetch rather than @anthropic-ai/sdk because that SDK imports Node
+ * built-ins (node:fs) that Metro cannot bundle for React Native. No sampling
+ * params are sent (temperature is removed on Opus 4.8 / 4.7) and thinking is
+ * left off, since the system prompt already demands JSON-only output.
  */
 async function callAnthropic(modelId: string, userQuery: string): Promise<string> {
-  if (!isProviderConfigured('anthropic')) {
+  const apiKey = getApiKey('anthropic');
+  if (!apiKey) {
     throw new Error('Anthropic API key not configured');
   }
 
-  const message = await anthropic.messages.create({
-    model: modelId,
-    max_tokens: 2048,
-    system: SYSTEM_PROMPT,
-    messages: [{ role: 'user', content: userQuery }],
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      // Permits calling the API directly from a client (no browser CORS in RN).
+      'anthropic-dangerous-direct-browser-access': 'true',
+    },
+    body: JSON.stringify({
+      model: modelId,
+      max_tokens: 2048,
+      system: SYSTEM_PROMPT,
+      messages: [{ role: 'user', content: userQuery }],
+    }),
   });
 
-  const text = message.content
-    .filter((block): block is Anthropic.TextBlock => block.type === 'text')
-    .map((block) => block.text)
-    .join('')
-    .trim();
+  if (!response.ok) {
+    const errorData = await response.text();
+    console.error('Anthropic API error:', response.status, errorData);
+    throw new Error(`Anthropic API error: ${response.status} - ${errorData}`);
+  }
+
+  const data = await response.json();
+  // content is an array of blocks; concatenate the text blocks.
+  const text: string = Array.isArray(data.content)
+    ? data.content
+        .filter((block: any) => block?.type === 'text')
+        .map((block: any) => block.text)
+        .join('')
+        .trim()
+    : '';
 
   if (!text) {
     throw new Error('No response from Anthropic');
