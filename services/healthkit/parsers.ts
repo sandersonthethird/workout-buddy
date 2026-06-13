@@ -156,6 +156,12 @@ export function parseStrokeSamples(
         console.warn('[parseStrokeSamples] Invalid timestamp for sample:', sample);
         return false;
       }
+      // stroke_count is NOT NULL; drop samples with a missing/NaN value so the
+      // insert doesn't fail the whole import transaction.
+      if (!Number.isFinite(sample.value)) {
+        console.warn('[parseStrokeSamples] Missing stroke value for sample:', sample);
+        return false;
+      }
       return true;
     })
     .map((sample) => ({
@@ -174,12 +180,26 @@ export function parseHeartRateSamples(
   workoutId: string,
   samples: HKQuantitySample[]
 ): HeartRateSample[] {
-  return samples.map((sample) => ({
-    id: uuid.v4() as string,
-    workout_id: workoutId,
-    timestamp: new Date(sample.startDate).getTime(),
-    heart_rate: Math.round(sample.value),
-  }));
+  return samples
+    .filter((sample) => {
+      const timestamp = new Date(sample.startDate).getTime();
+      // timestamp and heart_rate are both NOT NULL; drop samples missing either.
+      if (isNaN(timestamp) || !sample.startDate) {
+        console.warn('[parseHeartRateSamples] Invalid timestamp for sample:', sample);
+        return false;
+      }
+      if (!Number.isFinite(sample.value)) {
+        console.warn('[parseHeartRateSamples] Missing heart rate value for sample:', sample);
+        return false;
+      }
+      return true;
+    })
+    .map((sample) => ({
+      id: uuid.v4() as string,
+      workout_id: workoutId,
+      timestamp: new Date(sample.startDate).getTime(),
+      heart_rate: Math.round(sample.value),
+    }));
 }
 
 /**
@@ -223,6 +243,12 @@ export function parseDistanceSamplesIntoLaps(
     // Skip invalid timestamps
     if (isNaN(startTime) || isNaN(endTime) || !sample.startDate || !sample.endDate) {
       console.warn(`Skipping split ${index + 1}: invalid timestamps`, sample);
+      return;
+    }
+
+    // distance_meters is NOT NULL; skip splits with a missing/NaN distance.
+    if (!Number.isFinite(sample.value)) {
+      console.warn(`Skipping split ${index + 1}: invalid distance value`, sample);
       return;
     }
 
