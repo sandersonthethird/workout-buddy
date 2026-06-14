@@ -83,17 +83,11 @@ function parseLocationType(metadata?: HKSwimmingWorkoutMetadata): 'pool' | 'open
  * Returns both the length in meters and the original unit
  */
 function parsePoolLength(metadata?: HKSwimmingWorkoutMetadata): { meters: number; unit: 'yd' | 'm' } | null {
-  console.log('[parsePoolLength] Raw metadata:', JSON.stringify(metadata));
-  console.log('[parsePoolLength] Available metadata keys:', metadata ? Object.keys(metadata) : 'none');
-  console.log('[parsePoolLength] HKLapLength value:', metadata?.HKLapLength);
-
   if (!metadata?.HKLapLength) {
-    console.log('[parsePoolLength] No HKLapLength found in metadata');
     return null;
   }
 
   const { unit, quantity } = metadata.HKLapLength;
-  console.log('[parsePoolLength] Lap length:', { unit, quantity });
 
   // Normalize unit and convert to meters
   if (unit === 'yd' || unit === 'yard') {
@@ -352,22 +346,13 @@ export function parseLapsFromWorkoutEvents(
   workoutStartTime?: number,
   workoutEndTime?: number
 ): Lap[] {
-  console.log('[parseLapsFromWorkoutEvents] Total workout events:', workoutEvents.length);
-  console.log('[parseLapsFromWorkoutEvents] Event types:', workoutEvents.map(e => e.eventType));
-  console.log('[parseLapsFromWorkoutEvents] Stroke samples:', strokeSamples?.length || 0);
-
   const lapEvents = workoutEvents.filter(
     (event) => event.eventType === 'lap' || event.eventType === 'HKWorkoutEventTypeLap'
   );
 
-  console.log('[parseLapsFromWorkoutEvents] Filtered lap events:', lapEvents.length);
-
   if (lapEvents.length === 0) {
-    console.log('[parseLapsFromWorkoutEvents] No lap events found, returning empty array');
     return [];
   }
-
-  console.log('[parseLapsFromWorkoutEvents] First lap event sample:', JSON.stringify(lapEvents[0], null, 2));
 
   // Parse all laps first with their event durations
   const parsedLaps = lapEvents.map((event, index) => {
@@ -384,53 +369,10 @@ export function parseLapsFromWorkoutEvents(
       return sTime >= startTime && sTime <= endTime;
     });
 
-    // Debug logging for first few laps
-    if (index < 3) {
-      console.log(`[parseLapsFromWorkoutEvents] Lap ${index + 1} stroke matching:`, {
-        lapStart: new Date(startTime).toISOString(),
-        lapEnd: new Date(endTime).toISOString(),
-        lapStartMs: startTime,
-        lapEndMs: endTime,
-        totalStrokeSamples: strokeSamples?.length || 0,
-        relevantStrokeSamples: relevantStrokes.length,
-        firstStrokeSample: strokeSamples && strokeSamples.length > 0 ? {
-          startDate: strokeSamples[0].startDate,
-          startDateMs: new Date(strokeSamples[0].startDate).getTime(),
-          value: strokeSamples[0].value,
-          metadata: strokeSamples[0].metadata
-        } : 'none',
-        lastStrokeSample: strokeSamples && strokeSamples.length > 0 ? {
-          startDate: strokeSamples[strokeSamples.length - 1].startDate,
-          startDateMs: new Date(strokeSamples[strokeSamples.length - 1].startDate).getTime(),
-          value: strokeSamples[strokeSamples.length - 1].value
-        } : 'none',
-        relevantStrokeTimestamps: relevantStrokes.map(s => ({
-          time: s.startDate,
-          timeMs: new Date(s.startDate).getTime(),
-          value: s.value
-        }))
-      });
-    }
-
     // Sum total strokes and extract stroke style from metadata
     const totalStrokes = relevantStrokes.reduce((sum, s) => sum + s.value, 0);
 
-    // Debug: Check what's in the metadata
-    if (index < 3 && relevantStrokes.length > 0) {
-      console.log(`[parseLapsFromWorkoutEvents] Lap ${index + 1} metadata:`, {
-        metadata: relevantStrokes[0]?.metadata,
-        metadataKeys: relevantStrokes[0]?.metadata ? Object.keys(relevantStrokes[0].metadata) : [],
-        totalStrokes: totalStrokes,
-        fullSample: JSON.stringify(relevantStrokes[0], null, 2)
-      });
-    }
-
     const strokeStyleId = relevantStrokes[0]?.metadata?.HKSwimmingStrokeStyle;
-
-    // Debug: Log if stroke style is missing
-    if (strokeStyleId === undefined && relevantStrokes.length > 0) {
-      console.log(`[parseLapsFromWorkoutEvents] Lap ${index + 1}: No HKSwimmingStrokeStyle in metadata (totalStrokes=${totalStrokes}, duration=${durationSeconds}s)`);
-    }
 
     // Map stroke style ID to our type
     // Reference: https://developer.apple.com/documentation/healthkit/hkswimmingstrokestyle
@@ -543,19 +485,6 @@ export function parseLapsFromWorkoutEvents(
         preGapSeconds = Math.max(0, activePreGapSeconds);
         lap.duration_seconds += preGapSeconds;
       }
-
-      // Debug logging for first 3 laps
-      if (index < 3) {
-        console.log(`[parseLapsFromWorkoutEvents] Lap ${index + 1} duration adjustment:`, {
-          originalDuration: ((lap.end_time - lap.start_time) / 1000).toFixed(3),
-          totalGap: (gapMs / 1000).toFixed(3),
-          pausedTime: pausedSeconds.toFixed(3),
-          activeGap: activeGapSeconds.toFixed(3),
-          preGap: preGapSeconds.toFixed(3),
-          preGapPaused: preGapPausedSeconds.toFixed(3),
-          finalDuration: lap.duration_seconds.toFixed(3)
-        });
-      }
     });
   }
 
@@ -579,13 +508,6 @@ export function parseCompleteWorkoutData(
   strokeSamples: HKQuantitySample[],
   heartRateSamples: HKQuantitySample[]
 ): ParsedWorkoutData {
-  console.log('[Parser] Parsing workout:', {
-    uuid: hkWorkout.uuid,
-    distance: hkWorkout.distance,
-    workoutEvents: hkWorkout.workoutEvents?.length || 0,
-    distanceSamples: distanceSamples.length
-  });
-
   // Try to parse laps from workout events first (more reliable)
   let laps: Lap[] = [];
   let hasSplits = false;
@@ -596,24 +518,11 @@ export function parseCompleteWorkoutData(
 
     // If pool length is not in metadata, default to 25 yards (common US pool)
     if (!poolLength) {
-      console.log('[Parser] No pool length in metadata, defaulting to 25 yards');
       poolLength = {
         meters: 25 * 0.9144, // 25 yards = 22.86 meters
         unit: 'yd'
       };
     }
-
-    console.log('[Parser] Parsing laps from workoutEvents, pool length:', poolLength);
-    console.log('[Parser] About to parse with stroke samples:', {
-      strokeSampleCount: strokeSamples.length,
-      firstStrokeSample: strokeSamples[0] ? {
-        startDate: strokeSamples[0].startDate,
-        endDate: strokeSamples[0].endDate,
-        value: strokeSamples[0].value
-      } : 'none',
-      workoutEventCount: hkWorkout.workoutEvents.length,
-      firstWorkoutEvent: hkWorkout.workoutEvents[0]
-    });
 
     laps = parseLapsFromWorkoutEvents(
       '', // Will be replaced with actual workout ID below
@@ -625,13 +534,6 @@ export function parseCompleteWorkoutData(
       new Date(hkWorkout.end).getTime()
     );
     hasSplits = laps.length > 0;
-    console.log('[Parser] Parsed', laps.length, 'laps from workoutEvents');
-    console.log('[Parser] First 3 laps stroke counts:', laps.slice(0, 3).map(l => ({
-      lap: l.lap_number,
-      strokeCount: l.stroke_count,
-      startTime: new Date(l.start_time).toISOString(),
-      endTime: new Date(l.end_time).toISOString()
-    })));
   }
 
   // Fallback to distance samples if no workout events
@@ -686,22 +588,6 @@ export function parseCompleteWorkoutData(
     e.eventType === 'motion resumed' || e.eventType === 'HKWorkoutEventTypeMotionResumed'
   );
 
-  // Debug: Log first few pause/resume events to understand their structure
-  if (pauseEvents.length > 0) {
-    console.log('[parseCompleteWorkoutData] First 3 pause events:', pauseEvents.slice(0, 3).map(e => ({
-      eventType: e.eventType,
-      startDate: e.startDate,
-      startDateMs: new Date(e.startDate).getTime()
-    })));
-  }
-  if (resumeEvents.length > 0) {
-    console.log('[parseCompleteWorkoutData] First 3 resume events:', resumeEvents.slice(0, 3).map(e => ({
-      eventType: e.eventType,
-      startDate: e.startDate,
-      startDateMs: new Date(e.startDate).getTime()
-    })));
-  }
-
   // Helper function to calculate paused time within a time range
   const calculatePausedTimeInRange = (rangeStart: number, rangeEnd: number): number => {
     let totalPausedMs = 0;
@@ -745,20 +631,6 @@ export function parseCompleteWorkoutData(
       // Update distance and lap count
       segment.total_distance_meters = segmentLaps.reduce((sum, lap) => sum + lap.distance_meters, 0);
       segment.lap_count = segmentLaps.length;
-
-      // Debug logging for first segment
-      if (segment.segment_number === 1) {
-        console.log('[parseCompleteWorkoutData] Segment 1 duration breakdown:', {
-          segmentStartTime: segment.start_time,
-          segmentEndTime: segment.end_time,
-          nextSegmentStart: nextSegmentStartTime,
-          restGap: (nextSegmentStartTime - segment.end_time) / 1000,
-          swimTime: segment.swim_duration_seconds?.toFixed(2),
-          restTime: segment.rest_duration_seconds?.toFixed(2),
-          totalTime: segment.total_duration_seconds?.toFixed(2),
-          lapCount: segment.lap_count
-        });
-      }
     }
   });
 
@@ -766,7 +638,6 @@ export function parseCompleteWorkoutData(
   if (laps.length > 0) {
     const totalDistanceFromLaps = laps.reduce((sum, lap) => sum + lap.distance_meters, 0);
     workout.total_distance_meters = totalDistanceFromLaps;
-    console.log('[Parser] Calculated distance from laps:', totalDistanceFromLaps);
 
     // Set pool length on workout if we parsed it from workoutEvents
     const metadata = hkWorkout.metadata as HKSwimmingWorkoutMetadata | undefined;
@@ -781,13 +652,6 @@ export function parseCompleteWorkoutData(
     workout.pool_length_meters = poolLength.meters;
     workout.pool_length_unit = poolLength.unit;
   }
-
-  console.log('[Parser] Final workout:', {
-    id: workout.id,
-    distance: workout.total_distance_meters,
-    laps: laps.length,
-    segments: segments.length
-  });
 
   return {
     workout,

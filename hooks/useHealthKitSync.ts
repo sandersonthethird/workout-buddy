@@ -156,16 +156,6 @@ export function useHealthKitSync(): UseHealthKitSyncResult {
         }));
 
         try {
-          // Debug: Log the raw workout data structure
-          console.log('[Sync] Raw workout data:', {
-            uuid: hkWorkout.uuid,
-            hasWorkoutEvents: !!hkWorkout.workoutEvents,
-            workoutEventsCount: hkWorkout.workoutEvents?.length || 0,
-            workoutEventsRaw: hkWorkout.workoutEvents ? JSON.stringify(hkWorkout.workoutEvents.slice(0, 2)) : 'none'
-          });
-          console.log('[Sync] Full workout object keys:', Object.keys(hkWorkout));
-          console.log('[Sync] Workout metadata:', JSON.stringify(hkWorkout.metadata, null, 2));
-
           // Fetch detailed data for this workout
           const [distanceSamples, strokeSamples, heartRateSamples] = await Promise.all([
             queryDistanceSwimmingSamples(hkWorkout),
@@ -180,13 +170,6 @@ export function useHealthKitSync(): UseHealthKitSyncResult {
             strokeSamples,
             heartRateSamples
           );
-
-          console.log(`[Sync] ✅ Parsed workout ${i + 1}:`, {
-            distance: parsedData.workout.total_distance_meters,
-            laps: parsedData.laps.length,
-            poolLength: parsedData.workout.pool_length_meters,
-            unit: parsedData.workout.pool_length_unit
-          });
 
           // Insert into database
           await insertCompleteWorkoutData(
@@ -207,15 +190,7 @@ export function useHealthKitSync(): UseHealthKitSyncResult {
           workoutsFailed++;
           const errorMsg = error instanceof Error ? error.message : String(error);
           if (!firstErrorMessage) firstErrorMessage = errorMsg;
-          console.error(`[Sync] ❌ FAILED workout ${i + 1}:`, errorMsg);
-          console.error('[Sync] Workout details:', {
-            uuid: hkWorkout.uuid,
-            start: hkWorkout.start,
-            end: hkWorkout.end,
-            hasWorkoutEvents: !!hkWorkout.workoutEvents,
-            workoutEventsCount: hkWorkout.workoutEvents?.length || 0,
-          });
-          console.error('[Sync] Full error:', error);
+          console.error(`[Sync] Failed to import workout ${i + 1}/${workouts.length} (${hkWorkout.uuid}):`, errorMsg);
           // Continue with next workout instead of failing completely
         }
       }

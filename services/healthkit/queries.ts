@@ -70,11 +70,6 @@ export async function queryStrokeCountSamples(
   workout: HKWorkout
 ): Promise<HKQuantitySample[]> {
   return new Promise((resolve) => {
-    console.log('=== STROKE COUNT QUERY START ===');
-    console.log('[queryStrokeCountSamples] Workout UUID:', workout.uuid);
-    console.log('[queryStrokeCountSamples] Start:', workout.start);
-    console.log('[queryStrokeCountSamples] End:', workout.end);
-
     // Expand time window by 1 hour before and after workout
     const startDate = new Date(workout.start);
     startDate.setHours(startDate.getHours() - 1);
@@ -89,47 +84,29 @@ export async function queryStrokeCountSamples(
       limit: 0,
     };
 
-    console.log('[queryStrokeCountSamples] Expanded time window:', {
-      original: `${workout.start} to ${workout.end}`,
-      expanded: `${options.startDate} to ${options.endDate}`
-    });
-
     AppleHealthKit.getSamples(
       options,
       (error: string, results: any[]) => {
-        console.log('=== STROKE COUNT QUERY CALLBACK ===');
-
         if (error) {
-          console.log('[queryStrokeCountSamples] ❌ ERROR:', error);
-          console.log('=== STROKE COUNT QUERY END (ERROR) ===');
+          console.warn('[queryStrokeCountSamples] query error:', error);
           resolve([]);
           return;
         }
 
-        const resultCount = results?.length || 0;
-        console.log('[queryStrokeCountSamples] ✅ SUCCESS - Found', resultCount, 'stroke samples');
-
-        if (results && results.length > 0) {
-          console.log('[queryStrokeCountSamples] First 3 samples:', JSON.stringify(results.slice(0, 3), null, 2));
-        } else {
-          console.log('[queryStrokeCountSamples] ⚠️ NO STROKE SAMPLES RETURNED');
-        }
-
-        // Map results to HKQuantitySample format, preserving metadata
-        // Note: getSamples returns different field names than expected
+        // Map results to HKQuantitySample format, preserving metadata.
+        // getSamples returns 'quantity'/'start'/'end' instead of
+        // 'value'/'startDate'/'endDate'.
         const samples: HKQuantitySample[] = (results || []).map((sample: any) => ({
           id: sample.id || sample.uuid,
           uuid: sample.uuid || sample.id,
-          value: sample.quantity || sample.value, // getSamples uses 'quantity' not 'value'
-          startDate: sample.start || sample.startDate, // getSamples uses 'start' not 'startDate'
-          endDate: sample.end || sample.endDate, // getSamples uses 'end' not 'endDate'
+          value: sample.quantity || sample.value,
+          startDate: sample.start || sample.startDate,
+          endDate: sample.end || sample.endDate,
           metadata: sample.metadata || {}, // Contains HKSwimmingStrokeStyle
           sourceName: sample.sourceName,
           sourceId: sample.sourceId,
         }));
 
-        console.log('[queryStrokeCountSamples] Mapped to', samples.length, 'samples');
-        console.log('=== STROKE COUNT QUERY END ===');
         resolve(samples);
       }
     );
@@ -192,7 +169,6 @@ export async function queryDistanceSwimmingSamples(
         }
 
         if (!results || results.length === 0) {
-          console.log('No distance swimming samples found for workout');
           resolve([]);
           return;
         }
@@ -210,7 +186,6 @@ export async function queryDistanceSwimmingSamples(
           sourceId: sample.sourceId || workout.sourceId,
         }));
 
-        console.log(`Found ${samples.length} distance swimming samples`);
         resolve(samples);
       }
     );
