@@ -1,6 +1,38 @@
 import { getApiKey } from '@/lib/llm';
 import { getModel, DEFAULT_MODEL_ID } from '@/lib/models';
+import { ChatMessage } from '@/types/workout';
 import * as SQLite from 'expo-sqlite';
+
+type LlmTurn = { role: 'user' | 'assistant'; content: string };
+
+// How much prior conversation to send for context.
+const MAX_HISTORY_MESSAGES = 8; // ~4 exchanges
+const MAX_ASSISTANT_CHARS = 800;
+
+/**
+ * Convert prior chat messages into LLM turns so the model can interpret
+ * follow-up questions ("that for last month instead", "which was fastest").
+ * Assistant turns carry a trimmed view of the answer plus the SQL that
+ * produced it, which is what the model needs to build on a previous query.
+ */
+function buildHistoryTurns(history: ChatMessage[]): LlmTurn[] {
+  const turns: LlmTurn[] = history.slice(-MAX_HISTORY_MESSAGES).map((m) => {
+    if (m.role === 'assistant') {
+      let content =
+        m.content.length > MAX_ASSISTANT_CHARS
+          ? `${m.content.slice(0, MAX_ASSISTANT_CHARS)}…`
+          : m.content;
+      if (m.query_sql) content += `\n\n[SQL used: ${m.query_sql}]`;
+      return { role: 'assistant', content };
+    }
+    return { role: 'user', content: m.content };
+  });
+
+  // The Anthropic API requires the first message to be a user turn and roles to
+  // alternate; drop any leading assistant turn left by the slice.
+  while (turns.length > 0 && turns[0].role === 'assistant') turns.shift();
+  return turns;
+}
 
 /**
  * Query Parser Service
@@ -264,6 +296,11 @@ When providing the explanation:
 - Focus on the key insight or answer
 - Be concise and conversational
 
+Conversation context:
+- Earlier turns of this conversation may be included before the current question. Prior assistant turns show the answer that was given and, in brackets, the SQL that produced it.
+- Use that context to interpret follow-up questions that refer to previous questions or results — e.g. "show that for last month instead", "what about freestyle?", "only the top 3", "which of those was the longest?". Reuse the relevant filters and structure from the prior query, adjusted as requested.
+- Always answer the CURRENT (last) user question, and always return JSON for it.
+
 Remember:
 - Return ONLY the JSON object, no other text
 - Ensure the SQL is safe and valid SQLite
@@ -322,7 +359,11 @@ function validateParsed(parsed: any): { sql: string; explanation: string } {
  * Call OpenAI's chat completions endpoint via direct fetch (best React Native
  * compatibility) and return the raw JSON content string.
  */
-async function callOpenAI(modelId: string, userQuery: string): Promise<string> {
+async function callOpenAI(
+  modelId: string,
+  userQuery: string,
+  history: LlmTurn[]
+): Promise<string> {
   const apiKey = getApiKey('openai');
   if (!apiKey) {
     throw new Error('OpenAI API key not configured');
@@ -338,6 +379,7 @@ async function callOpenAI(modelId: string, userQuery: string): Promise<string> {
       model: modelId,
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
+        ...history,
         { role: 'user', content: userQuery },
       ],
       response_format: { type: 'json_object' },
@@ -367,7 +409,11 @@ async function callOpenAI(modelId: string, userQuery: string): Promise<string> {
  * params are sent (temperature is removed on Opus 4.8 / 4.7) and thinking is
  * left off, since the system prompt already demands JSON-only output.
  */
-async function callAnthropic(modelId: string, userQuery: string): Promise<string> {
+async function callAnthropic(
+  modelId: string,
+  userQuery: string,
+  history: LlmTurn[]
+): Promise<string> {
   const apiKey = getApiKey('anthropic');
   if (!apiKey) {
     throw new Error('Anthropic API key not configured');
@@ -386,7 +432,7 @@ async function callAnthropic(modelId: string, userQuery: string): Promise<string
       model: modelId,
       max_tokens: 2048,
       system: SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: userQuery }],
+      messages: [...history, { role: 'user', content: userQuery }],
     }),
   });
 
@@ -418,15 +464,17 @@ async function callAnthropic(modelId: string, userQuery: string): Promise<string
  */
 export async function parseNaturalLanguageQuery(
   userQuery: string,
-  modelId: string = DEFAULT_MODEL_ID
+  modelId: string = DEFAULT_MODEL_ID,
+  history: ChatMessage[] = []
 ): Promise<{ sql: string; explanation: string }> {
   const model = getModel(modelId);
+  const historyTurns = buildHistoryTurns(history);
 
   try {
     const content =
       model.provider === 'anthropic'
-        ? await callAnthropic(model.id, userQuery)
-        : await callOpenAI(model.id, userQuery);
+        ? await callAnthropic(model.id, userQuery, historyTurns)
+        : await callOpenAI(model.id, userQuery, historyTurns);
 
     return extractJsonObject(content);
   } catch (error) {
@@ -506,11 +554,12 @@ export async function executeQuery(
 export async function processUserQuery(
   db: SQLite.SQLiteDatabase,
   userQuery: string,
-  modelId: string = DEFAULT_MODEL_ID
+  modelId: string = DEFAULT_MODEL_ID,
+  history: ChatMessage[] = []
 ): Promise<QueryResult> {
   try {
-    // Step 1: Convert to SQL
-    const { sql, explanation } = await parseNaturalLanguageQuery(userQuery, modelId);
+    // Step 1: Convert to SQL (with prior conversation for follow-up context)
+    const { sql, explanation } = await parseNaturalLanguageQuery(userQuery, modelId, history);
 
     // Step 2: Execute query
     const results = await executeQuery(db, sql);
