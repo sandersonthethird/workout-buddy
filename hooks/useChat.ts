@@ -147,10 +147,12 @@ export function useChat() {
         created_at: Date.now(),
       };
 
+      // Capture the prior conversation as context before appending this turn.
+      const history = messages;
       setMessages((prev) => [...prev, userMessage]);
 
       try {
-        const result = await processUserQuery(db, content, selectedModelId);
+        const result = await processUserQuery(db, content, selectedModelId, history);
 
         if (result.error) {
           // Error responses are shown but not persisted.
@@ -211,7 +213,7 @@ export function useChat() {
         setIsLoading(false);
       }
     },
-    [db, isInitialized, selectedModelId, currentConversationId, refreshConversations]
+    [db, isInitialized, selectedModelId, currentConversationId, refreshConversations, messages]
   );
 
   return {
