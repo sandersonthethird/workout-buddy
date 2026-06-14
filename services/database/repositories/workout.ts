@@ -168,24 +168,6 @@ export async function insertCompleteWorkoutData(
   strokeSamples: StrokeSample[],
   heartRateSamples: HeartRateSample[]
 ): Promise<void> {
-  console.log('[DB] Inserting workout:', {
-    id: workout.id,
-    distance: workout.total_distance_meters,
-    laps: laps.length,
-    segments: segments.length
-  });
-
-  // Debug: Log first segment data before insert
-  if (segments.length > 0) {
-    console.log('[DB] First segment before insert:', {
-      id: segments[0].id,
-      segment_number: segments[0].segment_number,
-      swim_duration_seconds: segments[0].swim_duration_seconds,
-      rest_duration_seconds: segments[0].rest_duration_seconds,
-      total_duration_seconds: segments[0].total_duration_seconds
-    });
-  }
-
   // Use transaction for atomic insert
   await db.withTransactionAsync(async () => {
     await insertWorkout(db, workout);
@@ -194,8 +176,6 @@ export async function insertCompleteWorkoutData(
     await insertStrokeSamples(db, strokeSamples);
     await insertHeartRateSamples(db, heartRateSamples);
   });
-
-  console.log('[DB] Successfully inserted workout:', workout.id);
 }
 
 /**
