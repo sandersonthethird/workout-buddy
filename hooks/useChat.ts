@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import uuid from 'react-native-uuid';
 import { ChatMessage } from '@/types/workout';
 import { useDatabase } from '@/contexts/DatabaseContext';
@@ -147,14 +147,25 @@ export function useChat() {
     if (!db || !isInitialized) return;
 
     try {
+      // Load the most recent 50 messages, then show them oldest-first.
       const history = await db.getAllAsync<ChatMessage>(
-        'SELECT * FROM chat_messages ORDER BY created_at ASC LIMIT 50'
+        `SELECT * FROM (
+           SELECT * FROM chat_messages ORDER BY created_at DESC LIMIT 50
+         ) ORDER BY created_at ASC`
       );
       setMessages(history);
     } catch (err) {
       console.error('Failed to load chat history:', err);
     }
   }, [db, isInitialized]);
+
+  // Load persisted chat history once the database is ready so prior
+  // conversations are visible after the app is closed and reopened.
+  useEffect(() => {
+    if (db && isInitialized) {
+      loadHistory();
+    }
+  }, [db, isInitialized, loadHistory]);
 
   return {
     messages,
