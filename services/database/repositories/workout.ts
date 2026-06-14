@@ -443,6 +443,25 @@ export async function deleteWorkout(
 }
 
 /**
+ * Delete all workouts and their related data.
+ *
+ * Child rows cascade from workouts via ON DELETE CASCADE, but we delete them
+ * explicitly inside a transaction so it works even if foreign keys aren't
+ * enforced on a given connection.
+ */
+export async function deleteAllWorkouts(
+  db: SQLite.SQLiteDatabase
+): Promise<void> {
+  await db.withTransactionAsync(async () => {
+    await db.runAsync('DELETE FROM heart_rate_samples');
+    await db.runAsync('DELETE FROM stroke_samples');
+    await db.runAsync('DELETE FROM laps');
+    await db.runAsync('DELETE FROM segments');
+    await db.runAsync('DELETE FROM workouts');
+  });
+}
+
+/**
  * Get workouts that haven't been synced to cloud
  */
 export async function getUnsyncedWorkouts(

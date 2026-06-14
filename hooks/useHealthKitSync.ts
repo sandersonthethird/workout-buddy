@@ -14,6 +14,7 @@ import {
   insertCompleteWorkoutData,
   workoutExistsByHealthKitUuid,
   getWorkoutCount,
+  deleteAllWorkouts,
 } from '@/services/database/repositories/workout';
 
 export interface SyncProgress {
@@ -31,6 +32,7 @@ export interface UseHealthKitSyncResult {
   totalWorkoutsInDB: number;
   startSync: () => Promise<void>;
   refreshWorkoutCount: () => Promise<void>;
+  clearAllWorkouts: () => Promise<void>;
 }
 
 /**
@@ -266,11 +268,29 @@ export function useHealthKitSync(): UseHealthKitSyncResult {
     }
   }, [db, refreshWorkoutCount]);
 
+  // Delete all imported workouts so the next sync re-imports them fresh.
+  const clearAllWorkouts = useCallback(async () => {
+    if (!db) {
+      Alert.alert('Error', 'Database not initialized');
+      return;
+    }
+    try {
+      await deleteAllWorkouts(db);
+      await refreshWorkoutCount();
+      setSyncProgress(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      console.error('Failed to clear workouts:', error);
+      Alert.alert('Error', `Failed to clear workouts: ${message}`);
+    }
+  }, [db, refreshWorkoutCount]);
+
   return {
     syncProgress,
     isSyncing,
     totalWorkoutsInDB,
     startSync,
     refreshWorkoutCount,
+    clearAllWorkouts,
   };
 }
