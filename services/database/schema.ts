@@ -139,8 +139,11 @@ export const ALL_TABLES = [
   CREATE_SYNC_STATE_TABLE,
   CREATE_CONVERSATIONS_TABLE,
   CREATE_CHAT_MESSAGES_TABLE,
-  CREATE_INDEXES,
 ];
+
+// Indexes are created separately, AFTER reconcileSchema() has added any columns
+// missing from older databases — some indexes reference reconciled columns
+// (e.g. chat_messages.conversation_id), so creating them too early fails.
 
 // Database version for migrations
 export const CURRENT_SCHEMA_VERSION = 4;

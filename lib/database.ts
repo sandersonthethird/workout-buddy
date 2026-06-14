@@ -1,5 +1,5 @@
 import * as SQLite from 'expo-sqlite';
-import { ALL_TABLES, CURRENT_SCHEMA_VERSION } from '../services/database/schema';
+import { ALL_TABLES, CREATE_INDEXES, CURRENT_SCHEMA_VERSION } from '../services/database/schema';
 import { reconcileSchema } from '../services/database/migrations';
 
 /**
@@ -38,6 +38,10 @@ export async function initDatabase(): Promise<SQLite.SQLiteDatabase> {
     // Reconcile columns that may be missing on databases created under an
     // older schema (CREATE TABLE IF NOT EXISTS does not alter existing tables).
     await reconcileSchema(db);
+
+    // Create indexes AFTER reconcile, since some reference reconciled columns
+    // (e.g. chat_messages.conversation_id) that older databases lack until now.
+    await db.execAsync(CREATE_INDEXES);
 
     // Set schema version
     await db.execAsync(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION}`);
