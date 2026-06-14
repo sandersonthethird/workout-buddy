@@ -1,5 +1,7 @@
-import { StyleSheet, FlatList, View as RNView, ActivityIndicator } from 'react-native';
+import { useState } from 'react';
+import { StyleSheet, FlatList, View as RNView, ActivityIndicator, TouchableOpacity, Modal } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { formatDistanceToNow } from 'date-fns';
 
 import { Text, View } from '@/components/Themed';
 import { useDatabase } from '@/contexts/DatabaseContext';
@@ -13,7 +15,17 @@ import { getModel, PROVIDER_LABELS } from '@/lib/models';
 export default function TabOneScreen() {
   const { isInitialized, error: dbError } = useDatabase();
   const { selectedModelId } = useSettings();
-  const { messages, isLoading, error, sendMessage } = useChat();
+  const {
+    messages,
+    isLoading,
+    error,
+    sendMessage,
+    conversations,
+    currentConversationId,
+    newChat,
+    selectConversation,
+  } = useChat();
+  const [showChats, setShowChats] = useState(false);
 
   const selectedModel = getModel(selectedModelId);
   const providerConfigured = isProviderConfigured(selectedModel.provider);
@@ -22,8 +34,21 @@ export default function TabOneScreen() {
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <RNView style={styles.header}>
-        <Text style={styles.title}>Workout Buddy</Text>
-        <Text style={styles.subtitle}>Ask about your swim workouts</Text>
+        <RNView style={styles.headerText}>
+          <Text style={styles.title}>Workout Buddy</Text>
+          <Text style={styles.subtitle}>Ask about your swim workouts</Text>
+        </RNView>
+        <RNView style={styles.headerButtons}>
+          <TouchableOpacity style={styles.headerButton} onPress={() => setShowChats(true)}>
+            <Text style={styles.headerButtonText}>Chats</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.headerButton, styles.headerButtonPrimary]}
+            onPress={newChat}
+          >
+            <Text style={[styles.headerButtonText, styles.headerButtonPrimaryText]}>＋ New</Text>
+          </TouchableOpacity>
+        </RNView>
       </RNView>
 
       {!isReady ? (
@@ -90,6 +115,59 @@ export default function TabOneScreen() {
           <ChatInput onSend={sendMessage} disabled={isLoading} />
         </>
       )}
+
+      <Modal
+        visible={showChats}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setShowChats(false)}
+      >
+        <SafeAreaView style={styles.modalContainer} edges={['top']}>
+          <RNView style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Chats</Text>
+            <TouchableOpacity onPress={() => setShowChats(false)}>
+              <Text style={styles.modalClose}>Done</Text>
+            </TouchableOpacity>
+          </RNView>
+
+          <TouchableOpacity
+            style={styles.newChatRow}
+            onPress={() => {
+              newChat();
+              setShowChats(false);
+            }}
+          >
+            <Text style={styles.newChatText}>＋ New Chat</Text>
+          </TouchableOpacity>
+
+          <FlatList
+            data={conversations}
+            keyExtractor={(item) => item.id}
+            renderItem={({ item }) => {
+              const isActive = item.id === currentConversationId;
+              return (
+                <TouchableOpacity
+                  style={[styles.convoRow, isActive && styles.convoRowActive]}
+                  onPress={() => {
+                    selectConversation(item.id);
+                    setShowChats(false);
+                  }}
+                >
+                  <Text style={styles.convoTitle} numberOfLines={1}>
+                    {item.title || 'Untitled chat'}
+                  </Text>
+                  <Text style={styles.convoDate}>
+                    {formatDistanceToNow(new Date(item.updated_at), { addSuffix: true })}
+                  </Text>
+                </TouchableOpacity>
+              );
+            }}
+            ListEmptyComponent={
+              <Text style={styles.convoEmpty}>No saved chats yet. Send a message to start one.</Text>
+            }
+          />
+        </SafeAreaView>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -99,11 +177,100 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: '#E0E0E0',
     backgroundColor: '#FFFFFF',
+  },
+  headerText: {
+    flex: 1,
+    backgroundColor: 'transparent',
+  },
+  headerButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'transparent',
+  },
+  headerButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    marginLeft: 8,
+    borderWidth: 1,
+    borderColor: '#007AFF',
+  },
+  headerButtonText: {
+    color: '#007AFF',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  headerButtonPrimary: {
+    backgroundColor: '#007AFF',
+    borderColor: '#007AFF',
+  },
+  headerButtonPrimaryText: {
+    color: '#FFFFFF',
+  },
+  modalContainer: {
+    flex: 1,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#000',
+  },
+  modalClose: {
+    fontSize: 16,
+    color: '#007AFF',
+    fontWeight: '600',
+  },
+  newChatRow: {
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F0F0',
+  },
+  newChatText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#007AFF',
+  },
+  convoRow: {
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F0F0',
+  },
+  convoRowActive: {
+    backgroundColor: '#F0F7FF',
+  },
+  convoTitle: {
+    fontSize: 16,
+    color: '#000',
+  },
+  convoDate: {
+    fontSize: 12,
+    color: '#999',
+    marginTop: 4,
+  },
+  convoEmpty: {
+    fontSize: 14,
+    color: '#999',
+    textAlign: 'center',
+    padding: 24,
   },
   title: {
     fontSize: 24,

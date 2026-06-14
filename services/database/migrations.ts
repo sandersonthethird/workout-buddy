@@ -281,6 +281,9 @@ export async function reconcileSchema(db: SQLite.SQLiteDatabase): Promise<void> 
   await addColumnIfMissing(db, 'workouts', 'pool_length_unit', 'TEXT');
   await addColumnIfMissing(db, 'segments', 'swim_duration_seconds', 'REAL');
   await addColumnIfMissing(db, 'segments', 'rest_duration_seconds', 'REAL');
+  // Multi-conversation support: chat_messages created before conversations
+  // existed have no conversation_id.
+  await addColumnIfMissing(db, 'chat_messages', 'conversation_id', 'TEXT');
 }
 
 /**
