@@ -1,4 +1,4 @@
-import { StyleSheet, ScrollView, View as RNView, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { StyleSheet, ScrollView, View as RNView, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useEffect } from 'react';
 import { Text, View } from '@/components/Themed';
@@ -17,7 +17,23 @@ export default function TabTwoScreen() {
     totalWorkoutsInDB,
     startSync,
     refreshWorkoutCount,
+    clearAllWorkouts,
   } = useHealthKitSync();
+
+  const handleClearWorkouts = () => {
+    Alert.alert(
+      'Clear All Workouts?',
+      `This deletes all ${totalWorkoutsInDB} imported workouts and their data from this device. Your Apple Health data is not affected — you can re-sync at any time.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clear',
+          style: 'destructive',
+          onPress: () => clearAllWorkouts(),
+        },
+      ]
+    );
+  };
 
   const selectedModel = getModel(selectedModelId);
   const providers = Array.from(
@@ -96,6 +112,20 @@ export default function TabTwoScreen() {
             <Text style={styles.statsLabel}>Total Workouts:</Text>
             <Text style={styles.statsValue}>{totalWorkoutsInDB}</Text>
           </RNView>
+
+          <TouchableOpacity
+            style={[
+              styles.clearButton,
+              (isSyncing || totalWorkoutsInDB === 0) && styles.clearButtonDisabled,
+            ]}
+            onPress={handleClearWorkouts}
+            disabled={isSyncing || totalWorkoutsInDB === 0}
+          >
+            <Text style={styles.clearButtonText}>Clear All Workouts</Text>
+          </TouchableOpacity>
+          <Text style={styles.clearHint}>
+            Removes imported workouts so you can re-sync from HealthKit. Does not affect Apple Health.
+          </Text>
         </View>
 
         {/* Sync Section */}
@@ -329,6 +359,30 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: '#007AFF',
+  },
+  clearButton: {
+    marginTop: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#F44336',
+    backgroundColor: '#FFF',
+    alignItems: 'center',
+  },
+  clearButtonDisabled: {
+    opacity: 0.4,
+  },
+  clearButtonText: {
+    color: '#F44336',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  clearHint: {
+    fontSize: 12,
+    color: '#999',
+    marginTop: 8,
+    lineHeight: 16,
   },
   syncButton: {
     backgroundColor: '#007AFF',
