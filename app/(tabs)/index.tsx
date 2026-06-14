@@ -1,9 +1,11 @@
 import { useState } from 'react';
-import { StyleSheet, FlatList, View as RNView, ActivityIndicator, TouchableOpacity, Modal } from 'react-native';
+import { StyleSheet, FlatList, View as RNView, ActivityIndicator, TouchableOpacity, Modal, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { formatDistanceToNow } from 'date-fns';
+import FontAwesome from '@expo/vector-icons/FontAwesome';
 
 import { Text, View } from '@/components/Themed';
+import { Conversation } from '@/types/workout';
 import { useDatabase } from '@/contexts/DatabaseContext';
 import { useSettings } from '@/contexts/SettingsContext';
 import { useChat } from '@/hooks/useChat';
@@ -24,8 +26,24 @@ export default function TabOneScreen() {
     currentConversationId,
     newChat,
     selectConversation,
+    removeConversation,
   } = useChat();
   const [showChats, setShowChats] = useState(false);
+
+  const handleDeleteConversation = (item: Conversation) => {
+    Alert.alert(
+      'Delete chat?',
+      `"${item.title || 'Untitled chat'}" and its messages will be permanently deleted.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => removeConversation(item.id),
+        },
+      ]
+    );
+  };
 
   const selectedModel = getModel(selectedModelId);
   const providerConfigured = isProviderConfigured(selectedModel.provider);
@@ -146,20 +164,29 @@ export default function TabOneScreen() {
             renderItem={({ item }) => {
               const isActive = item.id === currentConversationId;
               return (
-                <TouchableOpacity
-                  style={[styles.convoRow, isActive && styles.convoRowActive]}
-                  onPress={() => {
-                    selectConversation(item.id);
-                    setShowChats(false);
-                  }}
-                >
-                  <Text style={styles.convoTitle} numberOfLines={1}>
-                    {item.title || 'Untitled chat'}
-                  </Text>
-                  <Text style={styles.convoDate}>
-                    {formatDistanceToNow(new Date(item.updated_at), { addSuffix: true })}
-                  </Text>
-                </TouchableOpacity>
+                <RNView style={[styles.convoRow, isActive && styles.convoRowActive]}>
+                  <TouchableOpacity
+                    style={styles.convoSelect}
+                    onPress={() => {
+                      selectConversation(item.id);
+                      setShowChats(false);
+                    }}
+                  >
+                    <Text style={styles.convoTitle} numberOfLines={1}>
+                      {item.title || 'Untitled chat'}
+                    </Text>
+                    <Text style={styles.convoDate}>
+                      {formatDistanceToNow(new Date(item.updated_at), { addSuffix: true })}
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.convoDelete}
+                    onPress={() => handleDeleteConversation(item)}
+                    hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                  >
+                    <FontAwesome name="trash-o" size={18} color="#F44336" />
+                  </TouchableOpacity>
+                </RNView>
               );
             }}
             ListEmptyComponent={
@@ -249,13 +276,23 @@ const styles = StyleSheet.create({
     color: '#007AFF',
   },
   convoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingHorizontal: 16,
-    paddingVertical: 14,
     borderBottomWidth: 1,
     borderBottomColor: '#F0F0F0',
   },
   convoRowActive: {
     backgroundColor: '#F0F7FF',
+  },
+  convoSelect: {
+    flex: 1,
+    paddingVertical: 14,
+    backgroundColor: 'transparent',
+  },
+  convoDelete: {
+    paddingVertical: 14,
+    paddingLeft: 16,
   },
   convoTitle: {
     fontSize: 16,

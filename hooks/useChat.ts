@@ -13,6 +13,7 @@ import {
   getConversationMessages,
   insertChatMessage,
   touchConversation,
+  deleteConversation,
   migrateOrphanMessages,
   makeConversationTitle,
 } from '@/services/database/repositories/chat';
@@ -81,6 +82,24 @@ export function useChat() {
     setMessages([]);
     setError(null);
   }, []);
+
+  /** Delete a conversation; if it's the open one, drop back to a new chat. */
+  const removeConversation = useCallback(
+    async (conversationId: string) => {
+      if (!db) return;
+      try {
+        await deleteConversation(db, conversationId);
+        if (conversationId === currentConversationId) {
+          setCurrentConversationId(null);
+          setMessages([]);
+        }
+        await refreshConversations();
+      } catch (err) {
+        console.error('Failed to delete conversation:', err);
+      }
+    },
+    [db, currentConversationId, refreshConversations]
+  );
 
   /** Open an existing conversation and load its messages. */
   const selectConversation = useCallback(
@@ -204,5 +223,6 @@ export function useChat() {
     sendMessage,
     newChat,
     selectConversation,
+    removeConversation,
   };
 }
