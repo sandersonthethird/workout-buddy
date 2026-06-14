@@ -9,10 +9,33 @@ import { ChatMessage, Conversation } from '@/types/workout';
  * reopened. A conversation groups an ordered list of chat_messages.
  */
 
-/** Build a short conversation title from the first user message. */
+/**
+ * Build a short, phrase-like conversation title from the first user message:
+ * the first handful of words, capped in length, with a trailing ellipsis when
+ * the message continues beyond that.
+ */
 export function makeConversationTitle(firstMessage: string): string {
   const cleaned = firstMessage.trim().replace(/\s+/g, ' ');
-  return cleaned.length > 40 ? `${cleaned.slice(0, 40).trim()}…` : cleaned || 'New chat';
+  if (!cleaned) return 'New chat';
+
+  const MAX_WORDS = 6;
+  const MAX_CHARS = 40;
+
+  const words = cleaned.split(' ');
+  let title = words.slice(0, MAX_WORDS).join(' ');
+  let truncated = words.length > MAX_WORDS;
+
+  if (title.length > MAX_CHARS) {
+    title = title.slice(0, MAX_CHARS).trim();
+    truncated = true;
+  }
+
+  // Drop trailing punctuation/whitespace before adding the ellipsis.
+  title = title.replace(/[\s,.;:!?-]+$/, '');
+  // Capitalize the first letter for a tidy title.
+  title = title.charAt(0).toUpperCase() + title.slice(1);
+
+  return truncated ? `${title}…` : title;
 }
 
 /** List conversations, most recently updated first. */
