@@ -8,6 +8,12 @@
     "scheme": "workoutbuddy",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": false,
+    "updates": {
+      "url": "https://u.expo.dev/1ff2fe5e-f0ed-450e-99b6-8901b1bd0807"
+    },
+    "runtimeVersion": {
+      "policy": "fingerprint"
+    },
     "splash": {
       "image": "./assets/images/splash-icon.png",
       "resizeMode": "contain",
