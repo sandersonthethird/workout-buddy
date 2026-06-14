@@ -96,9 +96,19 @@ CREATE TABLE IF NOT EXISTS sync_state (
 );
 `;
 
+export const CREATE_CONVERSATIONS_TABLE = `
+CREATE TABLE IF NOT EXISTS conversations (
+  id TEXT PRIMARY KEY,
+  title TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+`;
+
 export const CREATE_CHAT_MESSAGES_TABLE = `
 CREATE TABLE IF NOT EXISTS chat_messages (
   id TEXT PRIMARY KEY,
+  conversation_id TEXT,
   role TEXT NOT NULL,
   content TEXT NOT NULL,
   query_sql TEXT,
@@ -116,6 +126,7 @@ CREATE INDEX IF NOT EXISTS idx_laps_segment ON laps(segment_id);
 CREATE INDEX IF NOT EXISTS idx_stroke_samples_workout ON stroke_samples(workout_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_stroke_samples_lap ON stroke_samples(lap_id);
 CREATE INDEX IF NOT EXISTS idx_heart_rate_workout ON heart_rate_samples(workout_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation ON chat_messages(conversation_id, created_at);
 `;
 
 // All table creation statements in order
@@ -126,6 +137,7 @@ export const ALL_TABLES = [
   CREATE_STROKE_SAMPLES_TABLE,
   CREATE_HEART_RATE_SAMPLES_TABLE,
   CREATE_SYNC_STATE_TABLE,
+  CREATE_CONVERSATIONS_TABLE,
   CREATE_CHAT_MESSAGES_TABLE,
   CREATE_INDEXES,
 ];

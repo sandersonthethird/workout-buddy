@@ -1,29 +1,103 @@
 import { useState, useCallback, useEffect } from 'react';
 import uuid from 'react-native-uuid';
-import { ChatMessage } from '@/types/workout';
+import { ChatMessage, Conversation } from '@/types/workout';
 import { useDatabase } from '@/contexts/DatabaseContext';
 import { useSettings } from '@/contexts/SettingsContext';
 import { processUserQuery } from '@/services/chat/query-parser';
 import { formatQueryResults } from '@/services/chat/response-formatter';
 import { isProviderConfigured } from '@/lib/llm';
 import { getModel, PROVIDER_LABELS } from '@/lib/models';
+import {
+  listConversations,
+  createConversation,
+  getConversationMessages,
+  insertChatMessage,
+  touchConversation,
+  migrateOrphanMessages,
+  makeConversationTitle,
+} from '@/services/database/repositories/chat';
 
 /**
  * useChat Hook
  *
- * Manages chat state and handles message sending/receiving.
+ * Manages chat state across multiple conversations. The active conversation's
+ * messages are shown; a new chat is created lazily on the first message so
+ * empty conversations never clutter the list. Prior conversations are
+ * persisted and can be reopened.
  */
 
 export function useChat() {
   const { db, isInitialized } = useDatabase();
   const { selectedModelId } = useSettings();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  /**
-   * Send a message and get a response
-   */
+  const refreshConversations = useCallback(async () => {
+    if (!db) return;
+    try {
+      setConversations(await listConversations(db));
+    } catch (err) {
+      console.error('Failed to load conversations:', err);
+    }
+  }, [db]);
+
+  // On startup: migrate any legacy messages, load the conversation list, and
+  // open the most recent conversation so the user resumes where they left off.
+  useEffect(() => {
+    let active = true;
+
+    async function init() {
+      if (!db || !isInitialized) return;
+      try {
+        await migrateOrphanMessages(db);
+        const list = await listConversations(db);
+        if (!active) return;
+        setConversations(list);
+
+        if (list.length > 0) {
+          const recent = list[0]; // ordered by updated_at DESC
+          const msgs = await getConversationMessages(db, recent.id);
+          if (!active) return;
+          setCurrentConversationId(recent.id);
+          setMessages(msgs);
+        }
+      } catch (err) {
+        console.error('Failed to initialize chat:', err);
+      }
+    }
+
+    init();
+    return () => {
+      active = false;
+    };
+  }, [db, isInitialized]);
+
+  /** Start a fresh chat (the conversation is created on the first message). */
+  const newChat = useCallback(() => {
+    setCurrentConversationId(null);
+    setMessages([]);
+    setError(null);
+  }, []);
+
+  /** Open an existing conversation and load its messages. */
+  const selectConversation = useCallback(
+    async (conversationId: string) => {
+      if (!db) return;
+      setError(null);
+      setCurrentConversationId(conversationId);
+      try {
+        setMessages(await getConversationMessages(db, conversationId));
+      } catch (err) {
+        console.error('Failed to load conversation:', err);
+        setMessages([]);
+      }
+    },
+    [db]
+  );
+
   const sendMessage = useCallback(
     async (content: string) => {
       if (!db || !isInitialized) {
@@ -46,7 +120,6 @@ export function useChat() {
       setIsLoading(true);
       setError(null);
 
-      // Add user message
       const userMessage: ChatMessage = {
         id: uuid.v4() as string,
         role: 'user',
@@ -58,11 +131,10 @@ export function useChat() {
       setMessages((prev) => [...prev, userMessage]);
 
       try {
-        // Process query
         const result = await processUserQuery(db, content, selectedModelId);
 
         if (result.error) {
-          // Error response
+          // Error responses are shown but not persisted.
           const errorMessage: ChatMessage = {
             id: uuid.v4() as string,
             role: 'assistant',
@@ -72,44 +144,35 @@ export function useChat() {
           };
           setMessages((prev) => [...prev, errorMessage]);
           setError(result.error);
-        } else {
-          // Success response
-          const formattedResponse = formatQueryResults(
-            result.results,
-            result.explanation
-          );
+          return;
+        }
 
-          const assistantMessage: ChatMessage = {
-            id: uuid.v4() as string,
-            role: 'assistant',
-            content: formattedResponse,
-            query_sql: result.sql,
-            created_at: Date.now(),
-          };
+        const formattedResponse = formatQueryResults(result.results, result.explanation);
+        const assistantMessage: ChatMessage = {
+          id: uuid.v4() as string,
+          role: 'assistant',
+          content: formattedResponse,
+          query_sql: result.sql,
+          created_at: Date.now(),
+        };
 
-          setMessages((prev) => [...prev, assistantMessage]);
+        setMessages((prev) => [...prev, assistantMessage]);
 
-          // Optionally save to database
-          try {
-            await db.runAsync(
-              'INSERT INTO chat_messages (id, role, content, query_sql, created_at) VALUES (?, ?, ?, ?, ?)',
-              [userMessage.id, userMessage.role, userMessage.content, null, userMessage.created_at]
-            );
-
-            await db.runAsync(
-              'INSERT INTO chat_messages (id, role, content, query_sql, created_at) VALUES (?, ?, ?, ?, ?)',
-              [
-                assistantMessage.id,
-                assistantMessage.role,
-                assistantMessage.content,
-                assistantMessage.query_sql,
-                assistantMessage.created_at,
-              ]
-            );
-          } catch (saveError) {
-            console.warn('Failed to save messages to database:', saveError);
-            // Don't fail the whole operation if saving fails
+        // Persist this successful exchange, creating the conversation lazily on
+        // the first message so empty/errored chats aren't saved.
+        try {
+          let conversationId = currentConversationId;
+          if (!conversationId) {
+            const convo = await createConversation(db, makeConversationTitle(content));
+            conversationId = convo.id;
+            setCurrentConversationId(convo.id);
           }
+          await insertChatMessage(db, conversationId, userMessage);
+          await insertChatMessage(db, conversationId, assistantMessage);
+          await touchConversation(db, conversationId, assistantMessage.created_at);
+          await refreshConversations();
+        } catch (saveError) {
+          console.warn('Failed to save messages to database:', saveError);
         }
       } catch (err) {
         const errorMessage =
@@ -129,50 +192,17 @@ export function useChat() {
         setIsLoading(false);
       }
     },
-    [db, isInitialized, selectedModelId]
+    [db, isInitialized, selectedModelId, currentConversationId, refreshConversations]
   );
-
-  /**
-   * Clear all messages
-   */
-  const clearMessages = useCallback(() => {
-    setMessages([]);
-    setError(null);
-  }, []);
-
-  /**
-   * Load chat history from database
-   */
-  const loadHistory = useCallback(async () => {
-    if (!db || !isInitialized) return;
-
-    try {
-      // Load the most recent 50 messages, then show them oldest-first.
-      const history = await db.getAllAsync<ChatMessage>(
-        `SELECT * FROM (
-           SELECT * FROM chat_messages ORDER BY created_at DESC LIMIT 50
-         ) ORDER BY created_at ASC`
-      );
-      setMessages(history);
-    } catch (err) {
-      console.error('Failed to load chat history:', err);
-    }
-  }, [db, isInitialized]);
-
-  // Load persisted chat history once the database is ready so prior
-  // conversations are visible after the app is closed and reopened.
-  useEffect(() => {
-    if (db && isInitialized) {
-      loadHistory();
-    }
-  }, [db, isInitialized, loadHistory]);
 
   return {
     messages,
+    conversations,
+    currentConversationId,
     isLoading,
     error,
     sendMessage,
-    clearMessages,
-    loadHistory,
+    newChat,
+    selectConversation,
   };
 }

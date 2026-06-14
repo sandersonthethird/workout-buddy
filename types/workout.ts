@@ -74,10 +74,18 @@ export interface SyncState {
 
 export interface ChatMessage {
   id: string;
+  conversation_id?: string | null;
   role: 'user' | 'assistant';
   content: string;
   query_sql: string | null;
   created_at: number; // Unix timestamp
+}
+
+export interface Conversation {
+  id: string;
+  title: string | null;
+  created_at: number; // Unix timestamp
+  updated_at: number; // Unix timestamp
 }
 
 export type StrokeStyle =
