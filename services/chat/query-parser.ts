@@ -120,29 +120,35 @@ TABLE heart_rate_samples:
   - heart_rate: INTEGER (bpm)
 
 Important Notes:
+- This is SQLite. Use ONLY SQLite functions (strftime, datetime, ROUND, and window functions like ROW_NUMBER). NEVER use MySQL/Postgres functions such as NOW(), DATE_SUB(), EXTRACT(), or CURDATE().
+- Use ONLY the tables and columns listed above. NEVER invent columns or tables. If a requested metric does not exist, use the closest available column and say so in the explanation.
 - All dates are stored as Unix timestamps (milliseconds since epoch)
-- To filter by date, use: WHERE start_date >= strftime('%s', '2024-01-01') * 1000
+- ALWAYS display dates/times in local time with the 'localtime' modifier so the day matches the user's: datetime(start_date / 1000, 'unixepoch', 'localtime'). Without it, evening workouts can show the wrong date.
+- To filter by an absolute date: WHERE start_date >= strftime('%s', '2024-01-01') * 1000
+- Relative windows: "today"/"last 24 hours" -> '-1 day'; "this week"/"last 7 days" -> '-7 days'; "this month" -> '-1 month'. Example: WHERE start_date >= strftime('%s', 'now', '-7 days') * 1000
 - Current time in milliseconds: strftime('%s', 'now') * 1000
-- To get date from timestamp: datetime(start_date / 1000, 'unixepoch')
 - SWOLF score = stroke_count + duration in seconds (lower is better)
 
 Pace Conversions (CRITICAL for user queries):
 - All distances stored in METERS (distance_meters, total_distance_meters)
 - pace_per_100m_seconds is in seconds per 100 METERS
 - pool_length_unit indicates the workout's original unit ('yd' or 'm')
+- ALWAYS filter to swim laps with WHERE distance_meters > 0 before any pace math (rest laps have distance 0 and cause divide-by-zero or skew).
+- AVERAGE pace across multiple laps = total time / total distance, NOT the average of per-lap paces (averaging paces over-weights short/slow laps). Use SUM(duration_seconds) / SUM(distance_meters), then scale to the requested distance:
+  * average pace per 100 meters -> ROUND(SUM(duration_seconds) / SUM(distance_meters) * 100, 2)
+  * average pace per 100 yards  -> ROUND(SUM(duration_seconds) / SUM(distance_meters) * 91.44, 2)
+  * average pace per 25 yards   -> ROUND(SUM(duration_seconds) / SUM(distance_meters) * 22.86, 2)
 - When user requests pace in yards, convert using: 1 yard = 0.9144 meters
-- Pace per 100 yards = pace_per_100m_seconds * (100 * 0.9144 / 100) = pace_per_100m_seconds * 0.9144
-- Pace per 25 yards = (duration_seconds / (distance_meters / 0.9144)) * 25
-- Pace per 50 yards = (duration_seconds / (distance_meters / 0.9144)) * 50
-- Examples:
-  * "pace per 100 yards" → ROUND(l.pace_per_100m_seconds * 0.9144, 2) as pace_per_100yd
-  * "pace per 25 yards" → ROUND((l.duration_seconds / (l.distance_meters / 0.9144)) * 25, 2) as pace_per_25yd
-  * "pace per 50 meters" → ROUND((l.duration_seconds / l.distance_meters) * 50, 2) as pace_per_50m
+- PER-LAP pace conversions:
+  * "pace per 100 yards" (per lap) -> ROUND(l.pace_per_100m_seconds * 0.9144, 2) as pace_per_100yd
+  * "pace per 25 yards" (per lap)  -> ROUND((l.duration_seconds / (l.distance_meters / 0.9144)) * 25, 2) as pace_per_25yd
+  * "pace per 50 meters" (per lap) -> ROUND((l.duration_seconds / l.distance_meters) * 50, 2) as pace_per_50m
 
 Split Time Calculations (CRITICAL for split queries):
 - A "split" is a cumulative time for a specific distance, NOT individual laps
 - Example: 100-yard split in a 25-yard pool = sum of 4 consecutive laps (4x25yd)
 - CRITICAL: You MUST use SUM(duration_seconds) to add up multiple laps for each split
+- Match the split distance to the pool's unit by default: 100-yard splits for 'yd' pools, 100-meter splits for 'm' pools. target_split_meters = 91.44 for 100 yards, 100 for 100 meters.
 - Common split distances and their lap counts:
   * 100 yards (91.44m) in 25yd pool (22.86m) = 4 laps
   * 100 yards (91.44m) in 50yd pool (45.72m) = 2 laps
@@ -150,11 +156,15 @@ Split Time Calculations (CRITICAL for split queries):
   * 100 meters in 25m pool = 4 laps
   * 100 meters in 50m pool = 2 laps
 - Step-by-step calculation:
-  1. Calculate laps per split: ROUND(target_split_meters / pool_length_meters)
-  2. Assign each lap to a split group: CAST((lap_number - 1) / laps_per_split AS INTEGER)
-  3. SUM(duration_seconds) for all laps in each split group
-  4. GROUP BY workout_id AND split_number to get separate split times
-- CRITICAL WARNING: Even when the user asks for "lap numbers" or "which laps", you MUST still use SUM(duration_seconds) in the SELECT and GROUP BY workout_id and split_number. Use MIN(lap_number) and MAX(lap_number) to show the lap range, but NEVER select individual lap rows when calculating splits.
+  1. Filter to swim laps only (WHERE distance_meters > 0) and RE-SEQUENCE them per workout with a window function, because removing rest laps leaves gaps in lap_number:
+     ROW_NUMBER() OVER (PARTITION BY workout_id ORDER BY lap_number) AS seq
+  2. Laps per split: ROUND(target_split_meters / pool_length_meters)
+  3. Assign each lap to a split group using the RE-SEQUENCED number: CAST((seq - 1) / laps_per_split AS INTEGER)
+  4. SUM(duration_seconds) per group
+  5. GROUP BY workout_id AND split_number
+  6. HAVING COUNT(*) = laps_per_split to keep only complete splits
+- NEVER group splits by the raw lap_number: it is not contiguous once rest laps are removed, which corrupts splits in interval workouts. Always re-sequence with ROW_NUMBER first.
+- CRITICAL WARNING: Even when the user asks for "lap numbers" or "which laps", you MUST still use SUM(duration_seconds) and GROUP BY workout_id and split_number. Use MIN(lap_number) and MAX(lap_number) to show the lap range, but NEVER select individual lap rows when calculating splits.
 `;
 
 const SYSTEM_PROMPT = `You are an expert SQL query generator for a swim workout tracking database.
@@ -171,10 +181,11 @@ Your task:
 
 Guidelines:
 - Use ONLY SELECT statements (no INSERT, UPDATE, DELETE, DROP, etc.)
+- For any lap-level query (pace, splits, per-lap stats), ALWAYS include WHERE distance_meters > 0 to exclude rest laps
 - Join tables when needed for complete answers
-- Use appropriate aggregations (AVG, MAX, MIN, COUNT, SUM)
-- Format dates using datetime(timestamp / 1000, 'unixepoch') for display
-- For times: Use strftime('%H:%M', timestamp / 1000, 'unixepoch') or include full datetime
+- Use appropriate aggregations (AVG, MAX, MIN, COUNT, SUM); for "average pace" use total time / total distance, not AVG of per-lap paces
+- Format dates using datetime(timestamp / 1000, 'unixepoch', 'localtime') for display
+- For times: Use strftime('%H:%M', timestamp / 1000, 'unixepoch', 'localtime') or include full datetime
 - Only include time when user specifically asks for it (e.g., "what time did I swim?")
 - Round numbers to 2 decimal places where appropriate
 - Limit results to prevent overwhelming output (use LIMIT 10 unless user asks for more)
@@ -187,7 +198,7 @@ Example Queries:
 
 User: "What was my fastest 100m lap last month?"
 {
-  "sql": "SELECT datetime(l.start_time / 1000, 'unixepoch') as date, l.pace_per_100m_seconds, l.stroke_style FROM laps l JOIN workouts w ON l.workout_id = w.id WHERE w.start_date >= strftime('%s', 'now', '-1 month') * 1000 ORDER BY l.pace_per_100m_seconds ASC LIMIT 1",
+  "sql": "SELECT datetime(l.start_time / 1000, 'unixepoch', 'localtime') as date, l.pace_per_100m_seconds, l.stroke_style FROM laps l JOIN workouts w ON l.workout_id = w.id WHERE w.start_date >= strftime('%s', 'now', '-1 month') * 1000 AND l.distance_meters > 0 ORDER BY l.pace_per_100m_seconds ASC LIMIT 1",
   "explanation": "This query finds the fastest (lowest) pace per 100m from all laps in the past month."
 }
 
@@ -205,55 +216,61 @@ User: "How many workouts did I do this week?"
 
 User: "Show me a table with my 25-yard pace for every lap in my last workout"
 {
-  "sql": "SELECT l.lap_number, ROUND((l.duration_seconds / (l.distance_meters / 0.9144)) * 25, 2) as pace_per_25yd_seconds, l.stroke_style FROM laps l JOIN workouts w ON l.workout_id = w.id WHERE w.pool_length_unit = 'yd' ORDER BY w.start_date DESC, l.lap_number ASC LIMIT (SELECT COUNT(*) FROM laps WHERE workout_id = (SELECT id FROM workouts ORDER BY start_date DESC LIMIT 1))",
-  "explanation": "Pace per 25 yards for each lap in your most recent yard pool workout."
+  "sql": "SELECT l.lap_number, ROUND((l.duration_seconds / (l.distance_meters / 0.9144)) * 25, 2) as pace_per_25yd_seconds, l.stroke_style FROM laps l WHERE l.workout_id = (SELECT id FROM workouts ORDER BY start_date DESC LIMIT 1) AND l.distance_meters > 0 ORDER BY l.lap_number ASC",
+  "explanation": "Pace per 25 yards for each lap in your most recent workout."
 }
 
 User: "What was my average pace per 100 yards?"
 {
-  "sql": "SELECT ROUND(AVG(pace_per_100m_seconds * 0.9144), 2) as avg_pace_per_100yd_seconds FROM laps",
-  "explanation": "Your average pace per 100 yards across all laps."
+  "sql": "SELECT ROUND(SUM(duration_seconds) / SUM(distance_meters) * 91.44, 2) as avg_pace_per_100yd_seconds FROM laps WHERE distance_meters > 0",
+  "explanation": "Your average pace per 100 yards (total time over total distance) across all laps."
 }
 
 User: "Show my pace per 50 meters for my last workout"
 {
-  "sql": "SELECT lap_number, ROUND((duration_seconds / distance_meters) * 50, 2) as pace_per_50m_seconds FROM laps WHERE workout_id = (SELECT id FROM workouts ORDER BY start_date DESC LIMIT 1) ORDER BY lap_number ASC",
+  "sql": "SELECT lap_number, ROUND((duration_seconds / distance_meters) * 50, 2) as pace_per_50m_seconds FROM laps WHERE workout_id = (SELECT id FROM workouts ORDER BY start_date DESC LIMIT 1) AND distance_meters > 0 ORDER BY lap_number ASC",
   "explanation": "Pace per 50 meters for each lap in your most recent workout."
 }
 
 User: "Average pace per 25 yards by stroke"
 {
-  "sql": "SELECT stroke_style, ROUND(AVG((duration_seconds / (distance_meters / 0.9144)) * 25), 2) as avg_pace_per_25yd_seconds FROM laps WHERE stroke_style IS NOT NULL GROUP BY stroke_style ORDER BY avg_pace_per_25yd_seconds ASC",
-  "explanation": "Average pace per 25 yards for each stroke type."
+  "sql": "SELECT stroke_style, ROUND(SUM(duration_seconds) / SUM(distance_meters) * 22.86, 2) as avg_pace_per_25yd_seconds FROM laps WHERE stroke_style IS NOT NULL AND distance_meters > 0 GROUP BY stroke_style ORDER BY avg_pace_per_25yd_seconds ASC",
+  "explanation": "Average pace per 25 yards for each stroke type (total time over total distance)."
 }
 
 User: "Summarize my most recent workout"
 {
-  "sql": "SELECT datetime(w.start_date / 1000, 'unixepoch') as date, w.duration_seconds, w.total_distance_meters, w.pool_length_unit, w.total_energy_kcal, (SELECT COUNT(*) FROM laps WHERE workout_id = w.id) as lap_count FROM workouts w ORDER BY w.start_date DESC LIMIT 1",
+  "sql": "SELECT datetime(w.start_date / 1000, 'unixepoch', 'localtime') as date, w.duration_seconds, w.total_distance_meters, w.pool_length_unit, w.total_energy_kcal, (SELECT COUNT(*) FROM laps WHERE workout_id = w.id AND distance_meters > 0) as lap_count FROM workouts w ORDER BY w.start_date DESC LIMIT 1",
   "explanation": "Summary of your most recent swim workout."
 }
 
 User: "Show me the lap breakdown for my last workout"
 {
-  "sql": "SELECT l.lap_number, l.distance_meters, l.duration_seconds, l.stroke_style, l.pace_per_100m_seconds, w.pool_length_unit FROM laps l JOIN workouts w ON l.workout_id = w.id WHERE w.id = (SELECT id FROM workouts ORDER BY start_date DESC LIMIT 1) ORDER BY l.lap_number ASC",
+  "sql": "SELECT l.lap_number, l.distance_meters, l.duration_seconds, l.stroke_style, l.pace_per_100m_seconds, w.pool_length_unit FROM laps l JOIN workouts w ON l.workout_id = w.id WHERE w.id = (SELECT id FROM workouts ORDER BY start_date DESC LIMIT 1) AND l.distance_meters > 0 ORDER BY l.lap_number ASC",
   "explanation": "Lap-by-lap breakdown of your most recent workout."
 }
 
 User: "Show my 100-yard splits for my last workout"
 {
-  "sql": "WITH last_workout AS (SELECT id, pool_length_meters, pool_length_unit FROM workouts ORDER BY start_date DESC LIMIT 1), splits AS (SELECT CAST((l.lap_number - 1) / ROUND(91.44 / w.pool_length_meters) AS INTEGER) + 1 as split_number, SUM(l.duration_seconds) as split_time, w.pool_length_unit FROM laps l JOIN last_workout w ON l.workout_id = w.id WHERE l.distance_meters > 0 GROUP BY split_number) SELECT split_number, split_time as duration_seconds, pool_length_unit FROM splits ORDER BY split_number",
+  "sql": "WITH last_workout AS (SELECT id, pool_length_meters, pool_length_unit FROM workouts ORDER BY start_date DESC LIMIT 1), swim_laps AS (SELECT l.workout_id, l.duration_seconds, ROW_NUMBER() OVER (PARTITION BY l.workout_id ORDER BY l.lap_number) AS seq FROM laps l JOIN last_workout w ON l.workout_id = w.id WHERE l.distance_meters > 0), splits AS (SELECT CAST((sl.seq - 1) / ROUND(91.44 / w.pool_length_meters) AS INTEGER) + 1 as split_number, SUM(sl.duration_seconds) as split_time, w.pool_length_unit FROM swim_laps sl JOIN last_workout w ON sl.workout_id = w.id GROUP BY split_number HAVING COUNT(*) = ROUND(91.44 / w.pool_length_meters)) SELECT split_number, split_time as duration_seconds, pool_length_unit FROM splits ORDER BY split_number",
   "explanation": "100-yard split times from your most recent workout."
+}
+
+User: "Show my 100-meter splits for my last workout"
+{
+  "sql": "WITH last_workout AS (SELECT id, pool_length_meters, pool_length_unit FROM workouts ORDER BY start_date DESC LIMIT 1), swim_laps AS (SELECT l.workout_id, l.duration_seconds, ROW_NUMBER() OVER (PARTITION BY l.workout_id ORDER BY l.lap_number) AS seq FROM laps l JOIN last_workout w ON l.workout_id = w.id WHERE l.distance_meters > 0), splits AS (SELECT CAST((sl.seq - 1) / ROUND(100.0 / w.pool_length_meters) AS INTEGER) + 1 as split_number, SUM(sl.duration_seconds) as split_time FROM swim_laps sl JOIN last_workout w ON sl.workout_id = w.id GROUP BY split_number HAVING COUNT(*) = ROUND(100.0 / w.pool_length_meters)) SELECT split_number, split_time as duration_seconds FROM splits ORDER BY split_number",
+  "explanation": "100-meter split times from your most recent workout."
 }
 
 User: "What were my five fastest 100-yard split times from my last 10 workouts?"
 {
-  "sql": "WITH recent_workouts AS (SELECT id, pool_length_meters, pool_length_unit, start_date FROM workouts ORDER BY start_date DESC LIMIT 10), splits AS (SELECT w.id as workout_id, datetime(w.start_date / 1000, 'unixepoch') as workout_date, w.pool_length_unit, CAST((l.lap_number - 1) / ROUND(91.44 / w.pool_length_meters) AS INTEGER) as split_number, SUM(l.duration_seconds) as split_time FROM laps l JOIN recent_workouts w ON l.workout_id = w.id WHERE w.pool_length_unit = 'yd' AND l.distance_meters > 0 GROUP BY w.id, split_number HAVING COUNT(*) = ROUND(91.44 / w.pool_length_meters)) SELECT split_time as duration_seconds, workout_date, pool_length_unit FROM splits ORDER BY split_time ASC LIMIT 5",
+  "sql": "WITH recent_workouts AS (SELECT id, pool_length_meters, pool_length_unit, start_date FROM workouts ORDER BY start_date DESC LIMIT 10), swim_laps AS (SELECT l.workout_id, l.duration_seconds, ROW_NUMBER() OVER (PARTITION BY l.workout_id ORDER BY l.lap_number) AS seq FROM laps l JOIN recent_workouts w ON l.workout_id = w.id WHERE w.pool_length_unit = 'yd' AND l.distance_meters > 0), splits AS (SELECT sl.workout_id, datetime(w.start_date / 1000, 'unixepoch', 'localtime') as workout_date, w.pool_length_unit, CAST((sl.seq - 1) / ROUND(91.44 / w.pool_length_meters) AS INTEGER) as split_number, SUM(sl.duration_seconds) as split_time FROM swim_laps sl JOIN recent_workouts w ON sl.workout_id = w.id GROUP BY sl.workout_id, split_number HAVING COUNT(*) = ROUND(91.44 / w.pool_length_meters)) SELECT split_time as duration_seconds, workout_date, pool_length_unit FROM splits ORDER BY split_time ASC LIMIT 5",
   "explanation": "Your five fastest 100-yard splits from your last 10 workouts."
 }
 
 User: "Show my 10 fastest 100-yard splits from the last year with the workout date and lap numbers"
 {
-  "sql": "WITH recent_workouts AS (SELECT id, pool_length_meters, pool_length_unit, start_date FROM workouts WHERE start_date >= strftime('%s', 'now', '-1 year') * 1000 ORDER BY start_date DESC), splits AS (SELECT w.id as workout_id, date(w.start_date / 1000, 'unixepoch') as workout_date, w.pool_length_meters, w.pool_length_unit, CAST((l.lap_number - 1) / ROUND(91.44 / w.pool_length_meters) AS INTEGER) as split_number, SUM(l.duration_seconds) as split_time, MIN(l.lap_number) as first_lap, MAX(l.lap_number) as last_lap FROM laps l JOIN recent_workouts w ON l.workout_id = w.id WHERE w.pool_length_unit = 'yd' AND l.distance_meters > 0 GROUP BY w.id, split_number HAVING COUNT(*) = ROUND(91.44 / w.pool_length_meters)) SELECT split_time as duration_seconds, workout_date, CASE WHEN first_lap = last_lap THEN CAST(first_lap AS TEXT) ELSE CAST(first_lap AS TEXT) || '-' || CAST(last_lap AS TEXT) END as lap_range, pool_length_unit FROM splits ORDER BY split_time ASC LIMIT 10",
+  "sql": "WITH recent_workouts AS (SELECT id, pool_length_meters, pool_length_unit, start_date FROM workouts WHERE start_date >= strftime('%s', 'now', '-1 year') * 1000 ORDER BY start_date DESC), swim_laps AS (SELECT l.workout_id, l.lap_number, l.duration_seconds, ROW_NUMBER() OVER (PARTITION BY l.workout_id ORDER BY l.lap_number) AS seq FROM laps l JOIN recent_workouts w ON l.workout_id = w.id WHERE w.pool_length_unit = 'yd' AND l.distance_meters > 0), splits AS (SELECT sl.workout_id, date(w.start_date / 1000, 'unixepoch', 'localtime') as workout_date, CAST((sl.seq - 1) / ROUND(91.44 / w.pool_length_meters) AS INTEGER) as split_number, SUM(sl.duration_seconds) as split_time, MIN(sl.lap_number) as first_lap, MAX(sl.lap_number) as last_lap, w.pool_length_unit FROM swim_laps sl JOIN recent_workouts w ON sl.workout_id = w.id GROUP BY sl.workout_id, split_number HAVING COUNT(*) = ROUND(91.44 / w.pool_length_meters)) SELECT split_time as duration_seconds, workout_date, CASE WHEN first_lap = last_lap THEN CAST(first_lap AS TEXT) ELSE CAST(first_lap AS TEXT) || '-' || CAST(last_lap AS TEXT) END as lap_range, pool_length_unit FROM splits ORDER BY split_time ASC LIMIT 10",
   "explanation": "Your 10 fastest 100-yard splits from the past year."
 }
 
@@ -277,7 +294,7 @@ User: "What's my average heart rate when swimming freestyle?"
 
 User: "Show workouts where my average heart rate was above 150 bpm"
 {
-  "sql": "SELECT datetime(w.start_date / 1000, 'unixepoch') as date, AVG(l.avg_heart_rate) as avg_hr, w.total_distance_meters, w.pool_length_unit FROM workouts w JOIN laps l ON w.id = l.workout_id WHERE l.avg_heart_rate IS NOT NULL GROUP BY w.id HAVING AVG(l.avg_heart_rate) > 150 ORDER BY w.start_date DESC",
+  "sql": "SELECT datetime(w.start_date / 1000, 'unixepoch', 'localtime') as date, AVG(l.avg_heart_rate) as avg_hr, w.total_distance_meters, w.pool_length_unit FROM workouts w JOIN laps l ON w.id = l.workout_id WHERE l.avg_heart_rate IS NOT NULL GROUP BY w.id HAVING AVG(l.avg_heart_rate) > 150 ORDER BY w.start_date DESC",
   "explanation": "Workouts where your average heart rate exceeded 150 bpm."
 }
 
