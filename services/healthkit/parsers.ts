@@ -43,22 +43,27 @@ function calculateDataQuality(
 }
 
 /**
+ * Map HealthKit's HKSwimmingStrokeStyle metadata value to our stroke style.
+ * Unknown (0) and unrecognized values become null.
+ */
+const STROKE_STYLE_BY_HK_VALUE: Record<number, StrokeStyle> = {
+  [HKSwimmingStrokeStyle.Mixed]: 'mixed',
+  [HKSwimmingStrokeStyle.Freestyle]: 'freestyle',
+  [HKSwimmingStrokeStyle.Backstroke]: 'backstroke',
+  [HKSwimmingStrokeStyle.Breaststroke]: 'breaststroke',
+  [HKSwimmingStrokeStyle.Butterfly]: 'butterfly',
+  [HKSwimmingStrokeStyle.Kickboard]: 'kickboard',
+};
+
+export function strokeStyleFromHKValue(value: unknown): StrokeStyle | null {
+  return typeof value === 'number' ? STROKE_STYLE_BY_HK_VALUE[value] ?? null : null;
+}
+
+/**
  * Parse stroke style from HealthKit metadata
  */
 function parseStrokeStyle(metadata?: HKSwimmingWorkoutMetadata): StrokeStyle | null {
-  if (!metadata?.HKSwimmingStrokeStyle) {
-    return null;
-  }
-
-  const styleMap: Record<number, StrokeStyle> = {
-    [HKSwimmingStrokeStyle.Freestyle]: 'freestyle',
-    [HKSwimmingStrokeStyle.Backstroke]: 'backstroke',
-    [HKSwimmingStrokeStyle.Breaststroke]: 'breaststroke',
-    [HKSwimmingStrokeStyle.Butterfly]: 'butterfly',
-    [HKSwimmingStrokeStyle.Mixed]: 'mixed',
-  };
-
-  return styleMap[metadata.HKSwimmingStrokeStyle] || null;
+  return strokeStyleFromHKValue(metadata?.HKSwimmingStrokeStyle);
 }
 
 /**
@@ -372,19 +377,9 @@ export function parseLapsFromWorkoutEvents(
     // Sum total strokes and extract stroke style from metadata
     const totalStrokes = relevantStrokes.reduce((sum, s) => sum + s.value, 0);
 
-    const strokeStyleId = relevantStrokes[0]?.metadata?.HKSwimmingStrokeStyle;
-
-    // Map stroke style ID to our type
-    // Reference: https://developer.apple.com/documentation/healthkit/hkswimmingstrokestyle
-    const strokeStyleMap: Record<number, StrokeStyle> = {
-      1: 'mixed',
-      2: 'freestyle',
-      3: 'backstroke',
-      4: 'breaststroke',
-      5: 'butterfly',
-      6: 'kickboard',
-    };
-    const strokeStyle = strokeStyleId !== undefined ? (strokeStyleMap[strokeStyleId] || null) : null;
+    const strokeStyle = strokeStyleFromHKValue(
+      relevantStrokes[0]?.metadata?.HKSwimmingStrokeStyle
+    );
 
     // Calculate SWOLF if we have stroke count: SWOLF = strokes + seconds
     const swolfScore = totalStrokes > 0 ? Math.round(totalStrokes + durationSeconds) : null;

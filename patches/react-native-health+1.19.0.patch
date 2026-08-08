@@ -1,0 +1,123 @@
+diff --git a/node_modules/react-native-health/RCTAppleHealthKit/RCTAppleHealthKit+Methods_Fitness.m b/node_modules/react-native-health/RCTAppleHealthKit/RCTAppleHealthKit+Methods_Fitness.m
+index a83a441..5ab93aa 100644
+--- a/node_modules/react-native-health/RCTAppleHealthKit/RCTAppleHealthKit+Methods_Fitness.m
++++ b/node_modules/react-native-health/RCTAppleHealthKit/RCTAppleHealthKit+Methods_Fitness.m
+@@ -83,12 +83,24 @@
+         unit = [HKUnit mileUnit];
+     }
+ 
+-    [self fetchSamplesOfType:samplesType
+-                        unit:unit
+-                   predicate:predicate
+-                   ascending:ascending
+-                       limit:limit
+-                  completion:completion];
++    // Use fetchQuantitySamplesOfType for quantity types to get metadata (e.g., HKSwimmingStrokeStyle)
++    // Check if samplesType is actually a quantity type
++    if ([samplesType isKindOfClass:[HKQuantityType class]]) {
++        [self fetchQuantitySamplesOfType:(HKQuantityType *)samplesType
++                            unit:unit
++                       predicate:predicate
++                       ascending:ascending
++                           limit:limit
++                      completion:completion];
++    } else {
++        // Fall back to fetchSamplesOfType for non-quantity types (like workouts)
++        [self fetchSamplesOfType:samplesType
++                            unit:unit
++                       predicate:predicate
++                       ascending:ascending
++                           limit:limit
++                      completion:completion];
++    }
+ }
+ 
+ 
+diff --git a/node_modules/react-native-health/RCTAppleHealthKit/RCTAppleHealthKit+Queries.m b/node_modules/react-native-health/RCTAppleHealthKit/RCTAppleHealthKit+Queries.m
+index d6d61ef..9fc5bf6 100644
+--- a/node_modules/react-native-health/RCTAppleHealthKit/RCTAppleHealthKit+Queries.m
++++ b/node_modules/react-native-health/RCTAppleHealthKit/RCTAppleHealthKit+Queries.m
+@@ -536,13 +536,47 @@
+                             }
+                         }
+ 
++                        // Process metadata to handle HKQuantity objects like HKLapLength
++                        NSMutableDictionary *processedMetadata = [[NSMutableDictionary alloc] init];
++                        NSDictionary *rawMetadata = [sample metadata];
++                        for (NSString *key in rawMetadata) {
++                            id value = rawMetadata[key];
++
++                            // Special handling for HKLapLength (pool length)
++                            if ([key isEqualToString:HKMetadataKeyLapLength] && [value isKindOfClass:[HKQuantity class]]) {
++                                HKQuantity *lapLength = (HKQuantity *)value;
++
++                                // Try yards first, then meters
++                                HKUnit *yardUnit = [HKUnit unitFromString:@"yd"];
++                                HKUnit *meterUnit = [HKUnit meterUnit];
++
++                                // Check if the quantity is compatible with yards
++                                if ([lapLength isCompatibleWithUnit:yardUnit]) {
++                                    double yards = [lapLength doubleValueForUnit:yardUnit];
++                                    processedMetadata[key] = @{
++                                        @"quantity": @(yards),
++                                        @"unit": @"yd"
++                                    };
++                                } else if ([lapLength isCompatibleWithUnit:meterUnit]) {
++                                    double meters = [lapLength doubleValueForUnit:meterUnit];
++                                    processedMetadata[key] = @{
++                                        @"quantity": @(meters),
++                                        @"unit": @"m"
++                                    };
++                                }
++                            } else {
++                                // For other metadata, pass through as-is (will be nil if not JSON-serializable)
++                                processedMetadata[key] = value ?: [NSNull null];
++                            }
++                        }
++
+                         NSDictionary *elem = @{
+                                                @"activityId" : [NSNumber numberWithInt:[sample workoutActivityType]],
+                                                @"id" : [[sample UUID] UUIDString],
+                                                @"activityName" : type,
+                                                @"calories" : @(energy),
+                                                @"tracked" : @(isTracked),
+-                                               @"metadata" : [sample metadata],
++                                               @"metadata" : processedMetadata,
+                                                @"sourceName" : [[[sample sourceRevision] source] name],
+                                                @"sourceId" : [[[sample sourceRevision] source] bundleIdentifier],
+                                                @"device": device,
+diff --git a/node_modules/react-native-health/RCTAppleHealthKit/RCTAppleHealthKit+TypesAndPermissions.m b/node_modules/react-native-health/RCTAppleHealthKit/RCTAppleHealthKit+TypesAndPermissions.m
+index 287399f..6a9e270 100644
+--- a/node_modules/react-native-health/RCTAppleHealthKit/RCTAppleHealthKit+TypesAndPermissions.m
++++ b/node_modules/react-native-health/RCTAppleHealthKit/RCTAppleHealthKit+TypesAndPermissions.m
+@@ -71,6 +71,8 @@
+         return [HKObjectType quantityTypeForIdentifier:HKQuantityTypeIdentifierDistanceCycling];
+     } else if ([@"DistanceSwimming" isEqualToString: key]) {
+         return [HKObjectType quantityTypeForIdentifier:HKQuantityTypeIdentifierDistanceSwimming];
++    } else if ([@"SwimmingStrokeCount" isEqualToString: key]) {
++        return [HKObjectType quantityTypeForIdentifier:HKQuantityTypeIdentifierSwimmingStrokeCount];
+     } else if ([@"BasalEnergyBurned" isEqualToString: key]) {
+         return [HKObjectType quantityTypeForIdentifier:HKQuantityTypeIdentifierBasalEnergyBurned];
+     } else if ([@"ActiveEnergyBurned" isEqualToString: key]) {
+@@ -306,6 +308,8 @@
+         return [HKObjectType quantityTypeForIdentifier:HKQuantityTypeIdentifierDistanceCycling];
+     } else if ([@"DistanceSwimming" isEqualToString:key]) {
+         return [HKObjectType quantityTypeForIdentifier:HKQuantityTypeIdentifierDistanceSwimming];
++    } else if ([@"SwimmingStrokeCount" isEqualToString:key]) {
++        return [HKObjectType quantityTypeForIdentifier:HKQuantityTypeIdentifierSwimmingStrokeCount];
+     } else if ([@"BasalEnergyBurned" isEqualToString:key]) {
+         return [HKObjectType quantityTypeForIdentifier:HKQuantityTypeIdentifierBasalEnergyBurned];
+     } else if ([@"ActiveEnergyBurned" isEqualToString:key]) {
+diff --git a/node_modules/react-native-health/RCTAppleHealthKit/RCTAppleHealthKit+Utils.m b/node_modules/react-native-health/RCTAppleHealthKit/RCTAppleHealthKit+Utils.m
+index 307056d..fd536c3 100644
+--- a/node_modules/react-native-health/RCTAppleHealthKit/RCTAppleHealthKit+Utils.m
++++ b/node_modules/react-native-health/RCTAppleHealthKit/RCTAppleHealthKit+Utils.m
+@@ -218,6 +218,8 @@ NSString * const kMetadataKey = @"metadata";
+         return [HKObjectType quantityTypeForIdentifier:HKQuantityTypeIdentifierStepCount];
+     } else if ([type isEqual:@"Swimming"]){
+         return [HKObjectType quantityTypeForIdentifier:HKQuantityTypeIdentifierDistanceSwimming];
++    } else if ([type isEqual:@"SwimmingStrokeCount"]){
++        return [HKObjectType quantityTypeForIdentifier:HKQuantityTypeIdentifierSwimmingStrokeCount];
+     } else if ([type isEqual:@"Vo2Max"]){
+         return [HKObjectType quantityTypeForIdentifier:HKQuantityTypeIdentifierVO2Max];
+     } else if ([type isEqual:@"Walking"]) {

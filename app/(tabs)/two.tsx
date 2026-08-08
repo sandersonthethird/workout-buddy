@@ -184,6 +184,12 @@ export default function TabTwoScreen() {
                     </Text>
                   )}
 
+                  {syncProgress.workoutsRepaired > 0 && (
+                    <Text style={styles.progressDetail}>
+                      ↻ {syncProgress.workoutsRepaired} backfilled (stroke data)
+                    </Text>
+                  )}
+
                   {syncProgress.workoutsSkipped > 0 && (
                     <Text style={styles.progressDetail}>
                       ⊘ {syncProgress.workoutsSkipped} skipped (duplicates)

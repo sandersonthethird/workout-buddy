@@ -15,6 +15,8 @@ import {
   workoutExistsByHealthKitUuid,
   getWorkoutCount,
   deleteAllWorkouts,
+  getHealthKitUuidsMissingStrokeData,
+  deleteWorkoutByHealthKitUuid,
 } from '@/services/database/repositories/workout';
 
 export interface SyncProgress {
@@ -22,6 +24,7 @@ export interface SyncProgress {
   total: number;
   workoutsSynced: number;
   workoutsSkipped: number;
+  workoutsRepaired: number;
   status: 'requesting_permissions' | 'syncing' | 'complete' | 'error';
   message: string;
 }
@@ -73,6 +76,7 @@ export function useHealthKitSync(): UseHealthKitSyncResult {
       total: 0,
       workoutsSynced: 0,
       workoutsSkipped: 0,
+      workoutsRepaired: 0,
       status: 'requesting_permissions',
       message: 'Requesting HealthKit permissions...',
     });
@@ -112,6 +116,7 @@ export function useHealthKitSync(): UseHealthKitSyncResult {
           total: 0,
           workoutsSynced: 0,
           workoutsSkipped: 0,
+          workoutsRepaired: 0,
           status: 'complete',
           message: 'No swim workouts found in HealthKit',
         });
@@ -128,17 +133,25 @@ export function useHealthKitSync(): UseHealthKitSyncResult {
       // Step 3: Import each workout
       let workoutsSynced = 0;
       let workoutsSkipped = 0;
+      let workoutsRepaired = 0;
       let workoutsFailed = 0;
       // Capture the first failure's message so it's visible in-app (console
       // logs aren't accessible in a standalone build).
       let firstErrorMessage: string | null = null;
+
+      // Workouts imported by a build that couldn't read SwimmingStrokeCount
+      // have no stroke data, and the duplicate check below would skip them
+      // forever. Re-import those if HealthKit now returns stroke samples.
+      const uuidsMissingStrokeData = await getHealthKitUuidsMissingStrokeData(db);
 
       for (let i = 0; i < workouts.length; i++) {
         const hkWorkout = workouts[i];
 
         // Check if workout already exists
         const exists = await workoutExistsByHealthKitUuid(db, hkWorkout.uuid);
-        if (exists) {
+        const isRepair = exists && uuidsMissingStrokeData.has(hkWorkout.uuid);
+
+        if (exists && !isRepair) {
           workoutsSkipped++;
           setSyncProgress((prev) => ({
             ...prev!,
@@ -152,7 +165,9 @@ export function useHealthKitSync(): UseHealthKitSyncResult {
         setSyncProgress((prev) => ({
           ...prev!,
           current: i + 1,
-          message: `Importing workout ${i + 1}/${workouts.length}...`,
+          message: isRepair
+            ? `Backfilling stroke data (${i + 1}/${workouts.length})...`
+            : `Importing workout ${i + 1}/${workouts.length}...`,
         }));
 
         try {
@@ -163,6 +178,17 @@ export function useHealthKitSync(): UseHealthKitSyncResult {
             queryHeartRateSamples(hkWorkout),
           ]);
 
+          // Nothing to backfill: HealthKit has no stroke data for this workout
+          // either, so leave the stored copy alone.
+          if (isRepair && strokeSamples.length === 0) {
+            workoutsSkipped++;
+            setSyncProgress((prev) => ({
+              ...prev!,
+              workoutsSkipped,
+            }));
+            continue;
+          }
+
           // Parse into our format
           const parsedData = parseCompleteWorkoutData(
             hkWorkout,
@@ -170,6 +196,12 @@ export function useHealthKitSync(): UseHealthKitSyncResult {
             strokeSamples,
             heartRateSamples
           );
+
+          // Replace the incomplete copy; healthkit_uuid is UNIQUE, so the
+          // insert below would otherwise fail.
+          if (isRepair) {
+            await deleteWorkoutByHealthKitUuid(db, hkWorkout.uuid);
+          }
 
           // Insert into database
           await insertCompleteWorkoutData(
@@ -181,11 +213,19 @@ export function useHealthKitSync(): UseHealthKitSyncResult {
             parsedData.heartRateSamples
           );
 
-          workoutsSynced++;
-          setSyncProgress((prev) => ({
-            ...prev!,
-            workoutsSynced,
-          }));
+          if (isRepair) {
+            workoutsRepaired++;
+            setSyncProgress((prev) => ({
+              ...prev!,
+              workoutsRepaired,
+            }));
+          } else {
+            workoutsSynced++;
+            setSyncProgress((prev) => ({
+              ...prev!,
+              workoutsSynced,
+            }));
+          }
         } catch (error) {
           workoutsFailed++;
           const errorMsg = error instanceof Error ? error.message : String(error);
@@ -201,8 +241,9 @@ export function useHealthKitSync(): UseHealthKitSyncResult {
         total: workouts.length,
         workoutsSynced,
         workoutsSkipped,
+        workoutsRepaired,
         status: 'complete',
-        message: `Sync complete! ${workoutsSynced} workouts imported, ${workoutsSkipped} skipped${workoutsFailed > 0 ? `, ${workoutsFailed} failed` : ''}${firstErrorMessage ? `\nFirst error: ${firstErrorMessage}` : ''}`,
+        message: `Sync complete! ${workoutsSynced} workouts imported, ${workoutsSkipped} skipped${workoutsRepaired > 0 ? `, ${workoutsRepaired} backfilled` : ''}${workoutsFailed > 0 ? `, ${workoutsFailed} failed` : ''}${firstErrorMessage ? `\nFirst error: ${firstErrorMessage}` : ''}`,
       });
 
       // Refresh count
@@ -210,6 +251,9 @@ export function useHealthKitSync(): UseHealthKitSyncResult {
 
       // Build alert message
       let alertMessage = `Successfully imported ${workoutsSynced} workout${workoutsSynced !== 1 ? 's' : ''}!`;
+      if (workoutsRepaired > 0) {
+        alertMessage += `\nBackfilled stroke data for ${workoutsRepaired} existing workout${workoutsRepaired !== 1 ? 's' : ''}.`;
+      }
       if (workoutsSkipped > 0) {
         alertMessage += `\n${workoutsSkipped} duplicate${workoutsSkipped !== 1 ? 's' : ''} skipped.`;
       }
@@ -233,6 +277,7 @@ export function useHealthKitSync(): UseHealthKitSyncResult {
         total: 0,
         workoutsSynced: 0,
         workoutsSkipped: 0,
+        workoutsRepaired: 0,
         status: 'error',
         message: `Error: ${errorMessage}`,
       });

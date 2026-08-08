@@ -47,7 +47,7 @@ export interface HKQuantitySample {
 
 export interface HKSwimmingWorkoutMetadata {
   HKSwimmingLocationType?: number; // 1 = pool, 2 = open water
-  HKSwimmingStrokeStyle?: number; // 0 = unknown, 1 = mixed, 3 = freestyle, 4 = backstroke, 5 = breaststroke, 6 = butterfly
+  HKSwimmingStrokeStyle?: number; // See HKSwimmingStrokeStyle below
   HKLapLength?: { unit: string; quantity: number };
 }
 
@@ -57,13 +57,16 @@ export enum HKSwimmingLocationType {
   OpenWater = 2,
 }
 
+// Values match Apple's HKSwimmingStrokeStyle exactly — do not renumber.
+// https://developer.apple.com/documentation/healthkit/hkswimmingstrokestyle
 export enum HKSwimmingStrokeStyle {
   Unknown = 0,
   Mixed = 1,
-  Freestyle = 3,
-  Backstroke = 4,
-  Breaststroke = 5,
-  Butterfly = 6,
+  Freestyle = 2,
+  Backstroke = 3,
+  Breaststroke = 4,
+  Butterfly = 5,
+  Kickboard = 6,
 }
 
 // HealthKit Constants

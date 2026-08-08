@@ -19,6 +19,18 @@ An Expo mobile app for iOS that allows natural language querying of historical s
 npm install
 ```
 
+`postinstall` runs `patch-package`, which applies `patches/react-native-health+1.19.0.patch`.
+That patch is **required** for swim stroke data: stock react-native-health does not
+recognise the `SwimmingStrokeCount` HealthKit type and drops quantity-sample
+`metadata` (which carries `HKSwimmingStrokeStyle`) and workout `HKLapLength`.
+Without it, every imported workout silently lands with no stroke counts, no stroke
+styles, and a guessed pool length.
+
+The patch touches native Objective-C, so it only takes effect in a **new native build**
+(`npx expo run:ios` or `eas build`) — an OTA/EAS Update cannot deliver it. Never fix
+this by hand-editing `node_modules`; edit the patch (`npx patch-package react-native-health`
+after changing the files) so local and EAS builds stay in sync.
+
 ### 2. Configure Environment Variables
 
 Copy `.env.example` to `.env` and fill in your credentials:

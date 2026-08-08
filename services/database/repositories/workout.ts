@@ -398,6 +398,55 @@ export async function workoutExistsByHealthKitUuid(
 }
 
 /**
+ * HealthKit UUIDs of stored workouts that carry no stroke data at all.
+ *
+ * A build made without the react-native-health SwimmingStrokeCount patch gets
+ * back zero stroke samples from HealthKit, so workouts imported by it land with
+ * no stroke_samples rows and null lap stroke counts. The sync otherwise skips
+ * them forever as duplicates, so it needs to know which ones to re-import.
+ */
+export async function getHealthKitUuidsMissingStrokeData(
+  db: SQLite.SQLiteDatabase
+): Promise<Set<string>> {
+  const results = await db.getAllAsync<{ healthkit_uuid: string }>(
+    `SELECT w.healthkit_uuid FROM workouts w
+     WHERE NOT EXISTS (
+       SELECT 1 FROM stroke_samples s WHERE s.workout_id = w.id
+     )
+     AND NOT EXISTS (
+       SELECT 1 FROM laps l WHERE l.workout_id = w.id AND l.stroke_count IS NOT NULL
+     )`
+  );
+  return new Set(results.map((row) => row.healthkit_uuid));
+}
+
+/**
+ * Delete a single workout and its related data by HealthKit UUID.
+ *
+ * Children cascade from workouts, but they're deleted explicitly inside a
+ * transaction so this works even if foreign keys aren't enforced on a given
+ * connection (same reasoning as deleteAllWorkouts).
+ */
+export async function deleteWorkoutByHealthKitUuid(
+  db: SQLite.SQLiteDatabase,
+  healthkitUuid: string
+): Promise<void> {
+  const existing = await db.getFirstAsync<{ id: string }>(
+    'SELECT id FROM workouts WHERE healthkit_uuid = ?',
+    [healthkitUuid]
+  );
+  if (!existing) return;
+
+  await db.withTransactionAsync(async () => {
+    await db.runAsync('DELETE FROM heart_rate_samples WHERE workout_id = ?', [existing.id]);
+    await db.runAsync('DELETE FROM stroke_samples WHERE workout_id = ?', [existing.id]);
+    await db.runAsync('DELETE FROM laps WHERE workout_id = ?', [existing.id]);
+    await db.runAsync('DELETE FROM segments WHERE workout_id = ?', [existing.id]);
+    await db.runAsync('DELETE FROM workouts WHERE id = ?', [existing.id]);
+  });
+}
+
+/**
  * Update workout sync status
  */
 export async function updateWorkoutSyncStatus(
