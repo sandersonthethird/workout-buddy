@@ -287,6 +287,54 @@ export async function reconcileSchema(db: SQLite.SQLiteDatabase): Promise<void> 
 }
 
 /**
+ * Recompute lap metrics derived from duration_seconds so they agree with the
+ * lap time stored beside them.
+ *
+ * parseLapsFromWorkoutEvents used to compute swolf_score and
+ * pace_per_100m_seconds from the raw HealthKit lap-event duration, then widen
+ * duration_seconds afterwards to match the lap times Apple Fitness shows —
+ * without recomputing either. Laps imported before that fix therefore carry a
+ * SWOLF that is not stroke_count + duration_seconds, and a pace that does not
+ * match their own duration and distance.
+ *
+ * Pure arithmetic on stored columns, so this repairs history without a
+ * re-import. Idempotent, and the WHERE clauses make it a no-op once every row
+ * agrees, so it can run on every launch.
+ */
+export async function recomputeDerivedLapMetrics(
+  db: SQLite.SQLiteDatabase
+): Promise<void> {
+  // SWOLF = strokes for the lap + seconds for the lap.
+  const swolf = await db.runAsync(
+    `UPDATE laps
+        SET swolf_score = stroke_count + CAST(ROUND(duration_seconds) AS INTEGER)
+      WHERE stroke_count IS NOT NULL
+        AND stroke_count > 0
+        AND (
+          swolf_score IS NULL
+          OR swolf_score <> stroke_count + CAST(ROUND(duration_seconds) AS INTEGER)
+        )`
+  );
+
+  // Pace is seconds per 100m; rest laps have distance 0 and keep their 0.
+  const pace = await db.runAsync(
+    `UPDATE laps
+        SET pace_per_100m_seconds = (duration_seconds / distance_meters) * 100
+      WHERE distance_meters > 0
+        AND (
+          pace_per_100m_seconds IS NULL
+          OR ABS(pace_per_100m_seconds - (duration_seconds / distance_meters) * 100) > 0.01
+        )`
+  );
+
+  if (swolf.changes > 0 || pace.changes > 0) {
+    console.log(
+      `Recomputed lap metrics: ${swolf.changes} swolf_score, ${pace.changes} pace_per_100m_seconds`
+    );
+  }
+}
+
+/**
  * Migration v3: Restore pool_length_unit on workouts.
  *
  * migration_v2 rebuilt the workouts table without pool_length_unit, but the

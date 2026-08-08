@@ -1,6 +1,9 @@
 import * as SQLite from 'expo-sqlite';
 import { ALL_TABLES, CREATE_INDEXES, CURRENT_SCHEMA_VERSION } from '../services/database/schema';
-import { reconcileSchema } from '../services/database/migrations';
+import {
+  reconcileSchema,
+  recomputeDerivedLapMetrics,
+} from '../services/database/migrations';
 
 /**
  * Database Manager
@@ -42,6 +45,9 @@ export async function initDatabase(): Promise<SQLite.SQLiteDatabase> {
     // Create indexes AFTER reconcile, since some reference reconciled columns
     // (e.g. chat_messages.conversation_id) that older databases lack until now.
     await db.execAsync(CREATE_INDEXES);
+
+    // Repair lap metrics that were derived from a pre-adjustment lap duration.
+    await recomputeDerivedLapMetrics(db);
 
     // Set schema version
     await db.execAsync(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION}`);

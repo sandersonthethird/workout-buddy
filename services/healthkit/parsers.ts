@@ -307,15 +307,36 @@ export function parseDistanceSamplesIntoLaps(
 }
 
 /**
+ * A segment event marks one interval set. Apple emits either spelling.
+ */
+function isSegmentEvent(event: HKWorkoutEvent): boolean {
+  return event.eventType === 'segment' || event.eventType === 'HKWorkoutEventTypeSegment';
+}
+
+/**
+ * Time ranges of the workout's segments (interval sets), used to keep rest
+ * between sets from being counted as lap time.
+ */
+function parseSegmentRanges(
+  workoutEvents: HKWorkoutEvent[]
+): Array<{ start: number; end: number }> {
+  return workoutEvents
+    .filter(isSegmentEvent)
+    .map((event) => ({
+      start: new Date(event.startDate).getTime(),
+      end: new Date(event.endDate).getTime(),
+    }))
+    .filter((range) => !isNaN(range.start) && !isNaN(range.end));
+}
+
+/**
  * Parse segments from workout events
  */
 export function parseSegments(
   workoutId: string,
   workoutEvents: HKWorkoutEvent[]
 ): Segment[] {
-  const segmentEvents = workoutEvents.filter(
-    (event) => event.eventType === 'segment' || event.eventType === 'HKWorkoutEventTypeSegment'
-  );
+  const segmentEvents = workoutEvents.filter(isSegmentEvent);
 
   return segmentEvents.map((event, index) => {
     const startTime = new Date(event.startDate).getTime();
@@ -381,8 +402,9 @@ export function parseLapsFromWorkoutEvents(
       relevantStrokes[0]?.metadata?.HKSwimmingStrokeStyle
     );
 
-    // Calculate SWOLF if we have stroke count: SWOLF = strokes + seconds
-    const swolfScore = totalStrokes > 0 ? Math.round(totalStrokes + durationSeconds) : null;
+    // Provisional SWOLF; recomputed below once duration_seconds is final.
+    const swolfScore =
+      totalStrokes > 0 ? calculateSwolf(Math.round(totalStrokes), durationSeconds) : null;
 
     // Find heart rates in this time range
     const relevantHR = heartRateSamples.filter((hr) => {
@@ -457,31 +479,63 @@ export function parseLapsFromWorkoutEvents(
       return totalPausedMs / 1000; // Convert to seconds
     };
 
+    // Segment (interval set) ranges, so a lap is never stretched past the end
+    // of its own set. Apple Watch pool swims record rest as an absence of laps,
+    // not as a pause event, so without this bound the whole rest interval is
+    // added to the last lap of the set — inflating its time, SWOLF and pace.
+    // Rest belongs to segment.rest_duration_seconds, which is computed
+    // separately in parseCompleteWorkoutData.
+    const segmentRanges = parseSegmentRanges(workoutEvents);
+    const segmentForLap = (lap: Lap) =>
+      segmentRanges.find(
+        (range) => lap.start_time >= range.start && lap.end_time <= range.end
+      );
+
+    // Add the time between rangeStart and rangeEnd that was not paused.
+    const activeSpanSeconds = (rangeStart: number, rangeEnd: number): number => {
+      const spanSeconds = (rangeEnd - rangeStart) / 1000;
+      if (spanSeconds <= 0) return 0;
+      return Math.max(0, spanSeconds - calculatePausedTime(rangeStart, rangeEnd));
+    };
+
     parsedLaps.forEach((lap, index) => {
+      const segment = segmentForLap(lap);
+
+      // Extend the lap to the next lap, but never beyond its own set.
       const nextLapStartTime = index < parsedLaps.length - 1
         ? parsedLaps[index + 1].start_time
         : workoutEndTime;
+      const lapWindowEnd = Math.min(
+        nextLapStartTime,
+        segment ? segment.end : workoutEndTime
+      );
 
-      // Calculate gap time and subtract any paused time
-      const gapMs = nextLapStartTime - lap.end_time;
-      const pausedSeconds = calculatePausedTime(lap.end_time, nextLapStartTime);
-      const activeGapSeconds = (gapMs / 1000) - pausedSeconds;
+      // Wall touch, turn and glide time up to that bound
+      lap.duration_seconds += activeSpanSeconds(lap.end_time, lapWindowEnd);
 
-      // Only add active gap time (excludes pauses)
-      lap.duration_seconds += Math.max(0, activeGapSeconds);
-
-      // For first lap, also add time from workout start to lap start (excluding pauses)
-      let preGapSeconds = 0;
-      let preGapPausedSeconds = 0;
+      // For the first lap, also include the run-up to it — but no earlier than
+      // its own set started, so pre-swim idle time stays out of the lap.
       if (index === 0) {
-        const preGapMs = lap.start_time - workoutStartTime;
-        preGapPausedSeconds = calculatePausedTime(workoutStartTime, lap.start_time);
-        const activePreGapSeconds = (preGapMs / 1000) - preGapPausedSeconds;
-        preGapSeconds = Math.max(0, activePreGapSeconds);
-        lap.duration_seconds += preGapSeconds;
+        const lapWindowStart = Math.max(
+          workoutStartTime,
+          segment ? segment.start : workoutStartTime
+        );
+        lap.duration_seconds += activeSpanSeconds(lapWindowStart, lap.start_time);
       }
     });
   }
+
+  // duration_seconds is only final now that the gap adjustment above has run,
+  // so recompute everything derived from it. Computing these in the map above
+  // froze them at the raw lap-event duration, which left SWOLF and pace
+  // disagreeing with the lap time stored on the same row.
+  parsedLaps.forEach((lap) => {
+    lap.swolf_score =
+      lap.stroke_count && lap.stroke_count > 0
+        ? calculateSwolf(lap.stroke_count, lap.duration_seconds)
+        : null;
+    lap.pace_per_100m_seconds = calculatePace(lap.distance_meters, lap.duration_seconds);
+  });
 
   return parsedLaps;
 }

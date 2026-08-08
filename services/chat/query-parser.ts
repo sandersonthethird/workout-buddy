@@ -127,7 +127,7 @@ Important Notes:
 - To filter by an absolute date: WHERE start_date >= strftime('%s', '2024-01-01') * 1000
 - Relative windows: "today"/"last 24 hours" -> '-1 day'; "this week"/"last 7 days" -> '-7 days'; "this month" -> '-1 month'. Example: WHERE start_date >= strftime('%s', 'now', '-7 days') * 1000
 - Current time in milliseconds: strftime('%s', 'now') * 1000
-- SWOLF score = stroke_count + duration in seconds (lower is better)
+- SWOLF score = stroke_count + duration_seconds for that lap, rounded (lower is better). swolf_score and pace_per_100m_seconds are precomputed and consistent with the lap's stored duration_seconds — read the columns rather than recomputing them.
 
 Pace Conversions (CRITICAL for user queries):
 - All distances stored in METERS (distance_meters, total_distance_meters)
